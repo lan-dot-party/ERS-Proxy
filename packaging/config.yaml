@@ -1,0 +1,53 @@
+# ERS-Proxy configuration (package installation)
+# Devices, groups and users live in the database and are managed in the web
+# UI or with "ers-proxy device|user …". After changes:
+#   sudo systemctl restart ers-proxy
+
+# HTTP listen address. Behind a reverse proxy (recommended), bind to localhost
+# only; otherwise e.g. 0.0.0.0:9050 together with tls below.
+listen: 127.0.0.1:9050
+
+# Public URL as the browser sees it (scheme, host, port – no path).
+# With https://, session cookies are marked Secure. Must be correct, otherwise
+# every form is rejected as a cross-origin request.
+public_url: http://127.0.0.1:9050
+
+# Proxies whose X-Real-IP/X-Forwarded-For headers are trusted.
+trusted_proxies: [127.0.0.1, "::1"]
+
+# AES-256 key for switch passwords in the database (created by the package).
+secret_key_file: /etc/ers-proxy/secret.key
+
+storage:
+  path: /var/lib/ers-proxy/ers-proxy.db
+
+log:
+  level: info                 # debug, info, warn, error
+  format: text                # text or json
+
+proxy:
+  request_timeout: 60s
+  idle_timeout: 2h
+  max_conns_per_device: 4
+
+health:
+  enabled: true
+  interval: 60s
+  timeout: 5s
+
+ui:
+  default_open_mode: embedded # embedded, tab or window
+
+# Port monitoring history. Longer retention needs more disk space
+# (about 100 bytes per row, see docs/configuration.md).
+monitor:
+  retention:
+    minute: 48h               # 1-minute resolution (at least 1h)
+    quarter: 720h             # 15-minute resolution (30 days)
+    hour: 8760h               # 1-hour resolution (1 year)
+    events: 8760h             # link changes etc. (at least 24h)
+
+# Built-in TLS instead of a reverse proxy:
+# tls:
+#   cert_file: /etc/ers-proxy/tls.crt
+#   key_file: /etc/ers-proxy/tls.key

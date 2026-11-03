@@ -1,0 +1,52 @@
+name: Device report
+description: Tell us whether a switch model and firmware works with ERS-Proxy
+labels: [compatibility]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you! Reports like this fill `docs/compatibility.md`.
+        The diagnostics page (Settings → Diagnostics) shows the patch report of each device;
+        paste it below. Remove IP addresses and names you do not want to share.
+  - type: input
+    id: model
+    attributes:
+      label: Switch model
+      placeholder: "ERS 5698TFD-PWR"
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware version
+      placeholder: "6.6.3.015"
+    validations:
+      required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Connection to the switch
+      options: [HTTP, HTTPS]
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Works (login, device view and the dialogs I used)
+        - Partly works (describe below)
+        - Does not work
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Patch report and TLS details
+      description: From the diagnostics page and `ers-proxy tls-probe` (if HTTPS).
+      render: text
+  - type: textarea
+    id: notes
+    attributes:
+      label: What did not work?
+      description: Dialogs that fail, console errors (browser developer tools).

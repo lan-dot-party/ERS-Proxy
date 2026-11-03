@@ -1,0 +1,38 @@
+{{define "content"}}
+<h1>{{.T "groups.title"}}</h1>
+<section class="card">
+  <form method="post" action="/admin/groups" class="inline">
+    <input type="hidden" name="_csrf" value="{{.CSRF}}">
+    <input name="name" required maxlength="80" placeholder="{{.T "groups.name_placeholder"}}" aria-label="{{.T "col.name"}}">
+    <input name="sort" type="number" value="0" class="narrow" aria-label="{{.T "col.sort"}}" title="{{.T "col.sort"}}">
+    <button type="submit" class="primary">{{.T "groups.add"}}</button>
+  </form>
+</section>
+<section class="card">
+  {{if .Data.Groups}}
+  <table>
+    <thead><tr><th>{{.T "col.name"}}</th><th>{{.T "col.sort"}}</th><th>{{.T "col.devices"}}</th><th></th></tr></thead>
+    <tbody>
+    {{range .Data.Groups}}
+      <tr>
+        <td colspan="2">
+          <form method="post" action="/admin/groups/{{.ID}}" class="inline">
+            <input type="hidden" name="_csrf" value="{{$.CSRF}}">
+            <input name="name" value="{{.Name}}" required maxlength="80" aria-label="{{$.T "col.name"}}">
+            <input name="sort" type="number" value="{{.Sort}}" class="narrow" aria-label="{{$.T "col.sort"}}">
+            <button type="submit">{{$.T "action.save"}}</button>
+          </form>
+        </td>
+        <td>{{index $.Data.Counts .ID}}</td>
+        <td>
+          <form method="post" action="/admin/groups/{{.ID}}/delete" data-confirm="{{$.T "groups.delete_confirm" .Name}}">
+            <input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="link danger-text" type="submit">{{$.T "action.delete"}}</button>
+          </form>
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}<p class="muted">{{.T "groups.none"}}</p>{{end}}
+</section>
+{{end}}

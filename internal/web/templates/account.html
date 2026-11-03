@@ -1,0 +1,33 @@
+{{define "content"}}
+<h1>{{.T "account.title"}}: {{.User.Username}}</h1>
+<p class="muted">{{.T "col.role"}}: {{.T (print "role." .User.Role)}}</p>
+<div class="grid-2">
+<section class="card">
+  <h3>{{.T "account.prefs"}}</h3>
+  <form method="post" action="/account/prefs" class="form-grid">
+    <input type="hidden" name="_csrf" value="{{.CSRF}}">
+    <label>{{.T "account.open_mode"}}
+      <select name="open_mode">
+        <option value="">{{.T "account.open_default" (.T (print "open." .Data.DefaultMode))}}</option>
+        {{range openModes}}<option value="{{.}}"{{if eq . $.Data.OpenMode}} selected{{end}}>{{$.T (print "open." .)}}</option>{{end}}
+      </select>
+    </label>
+    <label>{{.T "account.language"}}
+      <select name="language"><option value="de"{{if eq .Lang "de"}} selected{{end}}>Deutsch</option><option value="en"{{if eq .Lang "en"}} selected{{end}}>English</option></select>
+    </label>
+    <div class="actions"><button type="submit" class="primary">{{.T "action.save"}}</button></div>
+  </form>
+  <p class="muted small">{{.T "account.open_hint"}}</p>
+</section>
+<section class="card">
+  <h3>{{.T "account.password"}}</h3>
+  <form method="post" action="/account/password" class="form-grid">
+    <input type="hidden" name="_csrf" value="{{.CSRF}}">
+    <label>{{.T "account.current"}}<input type="password" name="current" required autocomplete="current-password"></label>
+    <label>{{.T "users.new_password"}}<input type="password" name="password" required minlength="10" autocomplete="new-password"></label>
+    <div class="actions"><button type="submit" class="primary">{{.T "action.save"}}</button></div>
+  </form>
+  <p class="muted small">{{.T "account.password_hint"}}</p>
+</section>
+</div>
+{{end}}

@@ -1,0 +1,13 @@
+{{define "content"}}
+<section class="login card">
+  <h1><img src="/static/icon.svg" alt="" width="32" height="32"> ERS-Proxy</h1>
+  <form method="post" action="/login">
+    <input type="hidden" name="_login_csrf" value="{{.Data.CSRF}}">
+    <input type="hidden" name="next" value="{{.Data.Next}}">
+    <label>{{.T "login.username"}}<input name="username" autocomplete="username" required autofocus value="{{.Data.Username}}"></label>
+    <label>{{.T "login.password"}}<input name="password" type="password" autocomplete="current-password" required></label>
+    <button type="submit" class="primary">{{.T "login.submit"}}</button>
+  </form>
+  <p class="muted small">{{.T "login.hint"}}</p>
+</section>
+{{end}}

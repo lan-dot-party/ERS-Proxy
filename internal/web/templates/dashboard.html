@@ -1,0 +1,29 @@
+{{define "content"}}
+<div class="page-head">
+  <h1>{{.T "dash.title"}}</h1>
+  <div class="actions dash-tools">
+    <select id="dash-vlan" aria-label="{{.T "dash.vlan_filter"}}"><option value="">{{.T "dash.all_vlans"}}</option></select>
+    <input type="search" id="dash-search" placeholder="{{.T "dash.search"}}" aria-label="{{.T "dash.search"}}">
+  </div>
+</div>
+<p class="legend dash-legend">
+  <span class="tile-sample s10g"></span> 10G+ <span class="tile-sample s1g"></span> 1G <span class="tile-sample s100m"></span> 100M
+  <span class="tile-sample s10m"></span> 10M <span class="tile-sample sdown"></span> {{.T "dash.down"}}
+  <span class="tile-sample sadmin"></span> {{.T "dash.admin_down"}}
+  <span class="tile-sample s1g poe"></span> PoE <span class="tile-sample s1g trunk"></span> Trunk
+  <span class="tile-sample s1g uplink"></span> {{.T "dash.uplink"}} <span class="tile-sample s1g err"></span> {{.T "dash.errors"}}
+</p>
+<div id="dash" data-i18n="{{.Data.I18N}}" data-admin="{{if .Can "admin"}}1{{end}}">
+  {{if not .Data.Monitored}}
+  <section class="card empty">
+    <p>{{.T "dash.empty"}}</p>
+    {{if .Can "admin"}}<p><a class="button" href="/admin/devices">{{.T "devices.title"}}</a></p>{{end}}
+  </section>
+  {{end}}
+</div>
+<aside class="port-panel" id="port-panel" hidden aria-live="polite">
+  <div class="port-panel-head"><h3 id="port-panel-title"></h3><button type="button" class="link" id="port-panel-close"></button></div>
+  <table class="kv small" id="port-panel-body"></table>
+  <p class="actions" id="port-panel-actions"></p>
+</aside>
+{{end}}

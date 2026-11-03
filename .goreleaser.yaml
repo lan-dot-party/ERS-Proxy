@@ -1,0 +1,169 @@
+# GoReleaser configuration for ERS-Proxy (same layout as LANLeecher and FlowGauge).
+# Documentation: https://goreleaser.com
+#
+# Release flow: create and publish a release with a tag vX.Y.Z in the GitHub
+# web interface. .github/workflows/release.yml then builds, tests and attaches
+# everything below to that release.
+
+version: 2
+
+project_name: ers-proxy
+
+builds:
+  - id: ers-proxy
+    main: ./cmd/ers-proxy
+    binary: ers-proxy
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    flags:
+      - -trimpath
+    # Reproducible: the test job and the publish job build bit-identical binaries.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w
+      - -X github.com/lan-dot-party/ers-proxy/pkg/version.Version={{.Version}}
+      - -X github.com/lan-dot-party/ers-proxy/pkg/version.Commit={{.ShortCommit}}
+      - -X github.com/lan-dot-party/ers-proxy/pkg/version.BuildDate={{.CommitDate}}
+
+archives:
+  - id: default
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    files:
+      - README.md
+      - LICENSE
+      - docs/config.example.yaml
+      - packaging/ers-proxy.service
+
+nfpms:
+  - id: packages
+    package_name: ers-proxy
+    file_name_template: >-
+      {{ .PackageName }}_
+      {{- .Version }}_
+      {{- if eq .Arch "arm" }}armv7{{ else }}{{ .Arch }}{{ end }}
+    vendor: lan-dot-party
+    homepage: https://github.com/lan-dot-party/ERS-Proxy
+    maintainer: "LAN.party <gamie@lan.party>"
+    description: |-
+      Portal for the web interfaces of network devices.
+      ERS-Proxy makes the Enterprise Device Manager (EDM) of Avaya/Extreme ERS
+      switches work in modern browsers and opens all devices of a site in tabs
+      of one web UI, with browser isolation and certificate pinning.
+    license: MIT
+    section: net
+    formats:
+      - deb
+      - rpm
+      - archlinux
+      - apk
+    bindir: /usr/bin
+    mtime: "{{ .CommitDate }}"
+    contents:
+      - src: packaging/config.yaml
+        dst: /etc/ers-proxy/config.yaml
+        type: config|noreplace
+        file_info:
+          mode: 0640
+      - src: packaging/ers-proxy.service
+        dst: /usr/lib/systemd/system/ers-proxy.service
+        file_info:
+          mode: 0644
+      - src: packaging/ers-proxy.sysusers
+        dst: /usr/lib/sysusers.d/ers-proxy.conf
+        file_info:
+          mode: 0644
+      - src: docs/config.example.yaml
+        dst: /usr/share/doc/ers-proxy/config.example.yaml
+        file_info:
+          mode: 0644
+      - src: README.md
+        dst: /usr/share/doc/ers-proxy/README.md
+        file_info:
+          mode: 0644
+      - src: docs/reverse-proxy.md
+        dst: /usr/share/doc/ers-proxy/reverse-proxy.md
+        file_info:
+          mode: 0644
+      - src: LICENSE
+        dst: /usr/share/licenses/ers-proxy/LICENSE
+        file_info:
+          mode: 0644
+    scripts:
+      postinstall: packaging/scripts/postinstall.sh
+      preremove: packaging/scripts/preremove.sh
+      postremove: packaging/scripts/postremove.sh
+    overrides:
+      deb:
+        dependencies:
+          - ca-certificates
+      rpm:
+        dependencies:
+          - ca-certificates
+      archlinux:
+        dependencies:
+          - ca-certificates
+    archlinux:
+      packager: lan-dot-party
+
+checksum:
+  name_template: "SHA256SUMS"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+# The repository is taken from the git remote / GITHUB_REPOSITORY, so the
+# workflow works in Hornochs/ERS-Proxy as well as in lan-dot-party/ERS-Proxy.
+release:
+  # The release (and its notes) is created in the web interface; only add files.
+  mode: keep-existing
+  replace_existing_artifacts: true
+  prerelease: auto
+
+# One multi-arch image (amd64, arm64, armv7) on ghcr.io under the owner of the
+# repository that builds it (ghcr.io/<owner>/ers-proxy), like FlowGauge.
+dockers_v2:
+  - id: ers-proxy
+    ids: [ers-proxy]
+    dockerfile: Dockerfile.goreleaser
+    images:
+      - 'ghcr.io/{{ envOrDefault "GITHUB_REPOSITORY_OWNER" "lan-dot-party" | tolower }}/ers-proxy'
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+      - linux/arm/v7
+    extra_files:
+      - packaging/docker-config.yaml
+    labels:
+      org.opencontainers.image.title: ERS-Proxy
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.source: https://github.com/lan-dot-party/ERS-Proxy
+      org.opencontainers.image.licenses: MIT

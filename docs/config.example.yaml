@@ -1,0 +1,52 @@
+# ERS-Proxy configuration
+# Devices, groups and users live in the database and are managed
+# in the web UI or with the command line.
+
+# HTTP listen address. Behind a reverse proxy, bind to localhost only.
+listen: 127.0.0.1:9050
+
+# Public URL (scheme, host, port – no path). With https://, session
+# cookies are marked Secure. Must match what browsers see.
+public_url: http://127.0.0.1:9050
+
+# Proxies whose X-Real-IP/X-Forwarded-For headers are trusted.
+trusted_proxies: [127.0.0.1, "::1"]
+
+# AES-256 key for switch passwords in the database (created if missing).
+# Relative paths are relative to this file.
+secret_key_file: secret.key
+
+storage:
+  path: data/ers-proxy.db     # SQLite database file
+
+log:
+  level: info                 # debug, info, warn, error
+  format: text                # text or json
+
+proxy:
+  request_timeout: 60s        # one request to a switch
+  idle_timeout: 2h            # an opened device expires after this idle time
+  max_conns_per_device: 4     # old switch web servers handle few connections
+  max_body_bytes: 16777216
+
+health:
+  enabled: true               # reachability checks (status dots)
+  interval: 60s
+  timeout: 5s
+
+ui:
+  default_open_mode: embedded # embedded, tab or window
+
+# Port monitoring history. Longer retention needs more disk space
+# (about 100 bytes per row, see docs/configuration.md).
+monitor:
+  retention:
+    minute: 48h               # 1-minute resolution (at least 1h)
+    quarter: 720h             # 15-minute resolution (30 days)
+    hour: 8760h               # 1-hour resolution (1 year)
+    events: 8760h             # link changes etc. (at least 24h)
+
+# Built-in TLS (otherwise use a reverse proxy):
+# tls:
+#   cert_file: /etc/ers-proxy/tls.crt
+#   key_file: /etc/ers-proxy/tls.key

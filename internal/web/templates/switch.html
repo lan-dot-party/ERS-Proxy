@@ -1,0 +1,106 @@
+{{define "content"}}
+{{with .Data}}
+<p class="small"><a href="/dashboard">← {{$.T "sw.back"}}</a></p>
+<div class="page-head">
+  <div>
+    <h1>{{.Name}} <span class="badge">{{.Driver}}</span></h1>
+    {{if .Descr}}<p class="muted">{{.Descr}}</p>{{end}}
+  </div>
+  <div class="actions">
+    {{if .EDM}}<a class="button primary" href="/?open={{.ID}}">{{$.T "dash.open_edm"}}</a>{{end}}
+    {{if $.Can "admin"}}<a class="button" href="/admin/devices/{{.ID}}/edit">{{$.T "sw.edit"}}</a>{{end}}
+  </div>
+</div>
+
+<section class="card">
+  <div class="switch-meta">
+    {{if .Uptime}}<span>{{$.T "dash.uptime"}}: {{.Uptime}}</span>{{end}}
+    {{if .PoE}}<span>{{$.T "sw.poe_budget"}}: {{.PoE}}</span>{{end}}
+    {{if not .LastPoll.IsZero}}<span>{{$.T "dash.last_poll"}}: <time class="ts" data-ts="{{.LastPoll.Unix}}">{{.LastPoll.Format "2006-01-02 15:04:05"}}</time></span>{{end}}
+    {{if .Err}}<span class="err">{{$.T "dash.error"}}: {{.Err}}</span>{{end}}
+  </div>
+  {{if .Units}}
+  <div class="table-wrap"><table class="units">
+    <thead><tr><th>{{$.T "dash.unit"}}</th><th>{{$.T "sw.model"}}</th><th>{{$.T "sw.firmware"}}</th><th>{{$.T "sw.serial"}}</th></tr></thead>
+    <tbody>{{range .Units}}<tr><td>{{.Number}}</td><td>{{.Model}}</td><td>{{.Firmware}}</td><td>{{.Serial}}</td></tr>{{end}}</tbody>
+  </table></div>
+  {{end}}
+</section>
+
+{{if not .HasSnap}}
+<section class="card empty"><p>{{$.T "dash.no_data"}}</p></section>
+{{else}}
+<section class="card">
+  {{range .Plates}}
+  <div class="unit">
+    {{if .Label}}<div class="unit-label">{{$.T "dash.unit"}} {{.Number}}</div>{{end}}
+    <div class="faceplate{{if .Single}} single{{end}}">
+      {{range .Tiles}}<a class="{{.Class}}" href="{{.Href}}" title="{{.Title}}" aria-label="{{.Title}}">{{.Num}}</a>{{end}}
+    </div>
+  </div>
+  {{end}}
+  <p class="legend dash-legend">
+    <span class="tile-sample s10g"></span> 10G+ <span class="tile-sample s1g"></span> 1G <span class="tile-sample s100m"></span> 100M
+    <span class="tile-sample s10m"></span> 10M <span class="tile-sample sdown"></span> {{$.T "dash.down"}}
+    <span class="tile-sample sadmin"></span> {{$.T "dash.admin_down"}}
+    <span class="tile-sample s1g poe"></span> PoE <span class="tile-sample s1g trunk"></span> Trunk
+    <span class="tile-sample s1g uplink"></span> {{$.T "dash.uplink"}} <span class="tile-sample s1g err"></span> {{$.T "dash.errors"}}
+  </p>
+</section>
+
+<section class="card">
+  <h2>{{$.T "sw.ports"}}</h2>
+  <div class="table-wrap"><table class="sortable port-table">
+    <thead><tr>
+      <th data-sort="num">{{$.T "sw.col_port"}}</th><th data-sort="str">{{$.T "sw.col_name"}}</th><th data-sort="str">{{$.T "dash.state"}}</th>
+      <th data-sort="num">{{$.T "dash.speed"}}</th><th data-sort="num">{{$.T "dash.pvid"}}</th><th data-sort="str">{{$.T "dash.untagged"}}</th>
+      <th data-sort="str">{{$.T "dash.tagged"}}</th><th data-sort="str">{{$.T "dash.mode"}}</th><th data-sort="str">PoE</th>
+      <th data-sort="str">{{$.T "dash.lag"}}</th><th data-sort="str">{{$.T "dash.neighbor"}}</th>
+      <th data-sort="num">{{$.T "dash.in"}}</th><th data-sort="num">{{$.T "dash.out"}}</th>
+      <th data-sort="num">{{$.T "dash.utilization"}}</th><th data-sort="num">{{$.T "dash.errors"}}</th>
+    </tr></thead>
+    <tbody>
+    {{range .Ports}}<tr>
+      <td data-v="{{.Idx}}" class="nowrap"><a href="{{.Href}}">{{.Label}}</a></td>
+      <td data-v="{{.Port.Name}} {{.Port.Alias}}">{{.Port.Name}}{{if .Port.Alias}} <span class="muted">{{.Port.Alias}}</span>{{end}}</td>
+      <td data-v="{{.State}}"><span class="state {{.StateClass}}">{{.State}}</span></td>
+      <td data-v="{{if .Speed}}{{.SpeedBps}}{{else}}0{{end}}" class="nowrap">{{.Speed}}</td>
+      <td data-v="{{.Port.PVID}}">{{if .Port.PVID}}{{.Port.PVID}}{{end}}</td>
+      <td data-v="{{.Untagged}}">{{.Untagged}}</td>
+      <td data-v="{{.Tagged}}">{{.Tagged}}</td>
+      <td data-v="{{.Port.Mode}}">{{.Port.Mode}}</td>
+      <td data-v="{{.PoE}}">{{.PoE}}</td>
+      <td data-v="{{.LAG}}">{{.LAG}}</td>
+      <td data-v="{{.Neighbor}}">{{.Neighbor}}</td>
+      <td data-v="{{.InBps}}" class="nowrap">{{.In}}</td>
+      <td data-v="{{.OutBps}}" class="nowrap">{{.Out}}</td>
+      <td data-v="{{.UtilVal}}" class="nowrap">{{.Util}}</td>
+      <td data-v="{{.Errors}}" class="nowrap{{if .Errors}} err{{end}}">{{.ErrorsText}}</td>
+    </tr>{{end}}
+    </tbody>
+  </table></div>
+</section>
+
+<section class="card">
+  <h2>{{$.T "sw.vlans"}}</h2>
+  {{if .VLANs}}
+  <div class="table-wrap"><table class="sortable">
+    <thead><tr><th data-sort="num">{{$.T "sw.col_vlan"}}</th><th data-sort="str">{{$.T "sw.col_vlan_name"}}</th><th>{{$.T "dash.untagged"}}</th><th>{{$.T "dash.tagged"}}</th></tr></thead>
+    <tbody>
+    {{range .VLANs}}<tr>
+      <td data-v="{{.ID}}">{{.ID}}</td><td data-v="{{.Name}}">{{.Name}}</td>
+      <td class="portlist">{{range $i, $p := .Untagged}}{{if $i}}, {{end}}<a href="{{$p.Href}}">{{$p.Label}}</a>{{end}}</td>
+      <td class="portlist">{{range $i, $p := .Tagged}}{{if $i}}, {{end}}<a href="{{$p.Href}}">{{$p.Label}}</a>{{end}}</td>
+    </tr>{{end}}
+    </tbody>
+  </table></div>
+  {{else}}<p class="muted small">{{$.T "sw.no_vlans"}}</p>{{end}}
+</section>
+{{end}}
+
+<section class="card">
+  <h2>{{$.T "sw.events"}}</h2>
+  {{template "events" (dict "Events" .Events "P" $)}}
+</section>
+{{end}}
+{{end}}

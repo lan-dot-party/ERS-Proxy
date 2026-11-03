@@ -1,0 +1,48 @@
+{{define "content"}}
+{{with .Data}}
+<p class="small"><a href="/dashboard">{{$.T "nav.dashboard"}}</a> / <a href="{{.Base}}">{{.Switch.Name}}</a></p>
+<div class="page-head">
+  <h1>{{.Switch.Name}} · {{.Label}}{{if and .Port.Name (ne .Port.Name .Label)}} <span class="muted">({{.Port.Name}})</span>{{end}}</h1>
+  <div class="actions">
+    {{if .Switch.EDM}}<a class="button primary" href="/?open={{.Switch.ID}}">{{$.T "dash.open_edm"}}</a>{{end}}
+    <a class="button" href="{{.Base}}">{{$.T "sw.back_switch"}}</a>
+  </div>
+</div>
+
+<div class="grid-2">
+  <section class="card">
+    <h2>{{$.T "sw.port"}}</h2>
+    <table class="kv small">
+      {{range .Rows}}<tr><th>{{.K}}</th><td>{{.V}}</td></tr>{{end}}
+    </table>
+  </section>
+  <section class="card">
+    <h2>{{$.T "sw.port_events"}}</h2>
+    {{template "events" (dict "Events" .Events "P" $)}}
+  </section>
+</div>
+
+<section class="card">
+  <div class="card-head">
+    <h2>{{$.T "sw.chart"}}</h2>
+    <div class="actions span-buttons">
+      {{$span := .Span}}{{$base := .Base}}{{$ifi := .Port.IfIndex}}
+      {{range .Spans}}<a class="button{{if eq . $span}} primary{{end}}" href="{{$base}}/port/{{$ifi}}?span={{.}}"{{if eq . $span}} aria-current="true"{{end}}>{{.}}</a>{{end}}
+    </div>
+  </div>
+  {{if .HasChart}}
+  <div class="chart-wrap" data-l-in="{{$.T "dash.in"}}" data-l-out="{{$.T "dash.out"}}" data-l-max="{{$.T "sw.peak"}}" data-l-err="{{$.T "dash.errors"}}">
+    {{.Chart.SVG}}
+  </div>
+  <p class="legend">
+    <span class="swatch swatch-in"></span> {{$.T "dash.in"}} <span class="swatch swatch-out"></span> {{$.T "dash.out"}}
+    · {{$.T "sw.peak"}}: {{.PeakText}}
+  </p>
+  <h3 class="small muted">{{$.T "sw.err_chart"}}</h3>
+  <div class="chart-wrap">{{.Chart.ErrSVG}}</div>
+  {{else}}
+  <p class="muted empty-hist">{{$.T "sw.no_history"}}</p>
+  {{end}}
+</section>
+{{end}}
+{{end}}

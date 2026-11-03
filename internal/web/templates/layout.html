@@ -1,0 +1,77 @@
+{{define "layout"}}<!doctype html>
+<html lang="{{.Lang}}" data-theme="{{.Theme}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{if .Title}}{{.Title}} · {{end}}ERS-Proxy</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<script src="/static/app.js" defer></script>
+{{if eq .Nav "dashboard"}}<script src="/static/dashboard.js" defer></script><script src="/static/switch.js" defer></script>{{end}}
+</head>
+<body class="{{if .Wide}}wide{{end}}"{{if .CSRF}} data-csrf="{{.CSRF}}"{{end}}>
+{{if and .User (not .Embedded)}}
+<header class="topbar">
+  <a class="brand" href="/"><img src="/static/icon.svg" alt="" width="24" height="24"> ERS-Proxy</a>
+  <nav class="nav">
+    <a href="/" {{if eq .Nav "workspace"}}class="active"{{end}}>{{.T "nav.workspace"}}</a>
+    <a href="/dashboard" {{if eq .Nav "dashboard"}}class="active"{{end}}>{{.T "nav.dashboard"}}</a>
+    {{if .Can "admin"}}<a href="/admin/devices" {{if eq .Nav "admin"}}class="active"{{end}}>{{.T "nav.settings"}}</a>{{end}}
+  </nav>
+  <div class="user">
+    <form action="/account/theme" method="post" class="theme-toggle">
+      <input type="hidden" name="_csrf" value="{{.CSRF}}">
+      <input type="hidden" name="theme" value="{{.NextTheme}}">
+      <input type="hidden" name="back" value="{{.Path}}">
+      <button class="icon" type="submit" title="{{.T "theme.toggle" (.T (print "theme." .Theme)) (.T (print "theme." .NextTheme))}}"
+        aria-label="{{.T "theme.toggle" (.T (print "theme." .Theme)) (.T (print "theme." .NextTheme))}}">{{if eq .Theme "dark"}}☾{{else if eq .Theme "light"}}☀{{else}}◐{{end}}</button>
+    </form>
+    <a href="/account" {{if eq .Nav "account"}}class="active"{{end}}>{{.User.Username}}</a>
+    <form action="/logout" method="post"><input type="hidden" name="_csrf" value="{{.CSRF}}">
+      <button class="link" type="submit">{{.T "nav.logout"}}</button></form>
+  </div>
+</header>
+{{end}}
+{{if and .Insecure (not .Embedded)}}<p class="banner-warn">{{.T "banner.insecure"}}</p>{{end}}
+{{if .Wide}}
+{{if .Flash}}<p class="alert alert-ok">{{.Flash}}</p>{{end}}
+{{if .Error}}<p class="alert alert-error">{{.Error}}</p>{{end}}
+{{template "content" .}}
+{{else}}
+<main class="container">
+{{if eq .Nav "admin"}}{{template "adminnav" .}}{{end}}
+{{if .Flash}}<p class="alert alert-ok">{{.Flash}}</p>{{end}}
+{{if .Error}}<p class="alert alert-error">{{.Error}}</p>{{end}}
+{{template "content" .}}
+</main>
+{{if not .Embedded}}<footer class="footer">ERS-Proxy {{.Version}} · MIT · <a href="https://github.com/lan-dot-party/ERS-Proxy" rel="noopener noreferrer">GitHub</a></footer>{{end}}
+{{end}}
+</body>
+</html>{{end}}
+
+{{define "adminnav"}}
+<nav class="subnav">
+  <a href="/admin/devices" {{if eq .Title (.T "devices.title")}}class="active"{{end}}>{{.T "devices.title"}}</a>
+  <a href="/admin/groups" {{if eq .Title (.T "groups.title")}}class="active"{{end}}>{{.T "groups.title"}}</a>
+  <a href="/admin/users" {{if eq .Title (.T "users.title")}}class="active"{{end}}>{{.T "users.title"}}</a>
+  <a href="/admin/audit" {{if eq .Title (.T "audit.title")}}class="active"{{end}}>{{.T "audit.title"}}</a>
+  <a href="/admin/diagnostics" {{if eq .Title (.T "diag.title")}}class="active"{{end}}>{{.T "diag.title"}}</a>
+</nav>
+{{end}}
+
+{{define "events"}}
+{{if .Events}}
+<div class="table-wrap"><table class="events">
+  <thead><tr><th>{{.P.T "sw.col_time"}}</th><th>{{.P.T "sw.col_port"}}</th><th>{{.P.T "sw.col_kind"}}</th><th>{{.P.T "sw.col_change"}}</th></tr></thead>
+  <tbody>
+  {{range .Events}}<tr>
+    <td class="nowrap"><time class="ts" data-ts="{{.At.Unix}}" datetime="{{.At.UTC.Format "2006-01-02T15:04:05Z"}}">{{.At.Format "2006-01-02 15:04:05"}}</time></td>
+    <td><a href="{{.PortHref}}">{{.Port}}</a></td>
+    <td>{{.Kind}}</td>
+    <td>{{.From}} → {{.To}}</td>
+  </tr>{{end}}
+  </tbody>
+</table></div>
+{{else}}<p class="muted small">{{.P.T "sw.no_events"}}</p>{{end}}
+{{end}}
+

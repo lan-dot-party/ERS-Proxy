@@ -1,0 +1,39 @@
+{{define "content"}}
+{{$d := .Data.Device}}{{$p := .Data.Probe}}
+<section class="card trust">
+  <h2>{{.T "trust.title"}}: {{$d.Name}}</h2>
+  <p class="muted"><code>{{$d.URL}}</code></p>
+  {{if and $p $p.Cert}}
+  <p>{{.T "trust.explain"}}</p>
+  <table class="kv">
+    <tr><th>{{.T "trust.fingerprint"}}</th><td><code class="fingerprint">{{$p.Cert.Fingerprint}}</code></td></tr>
+    <tr><th>{{.T "trust.subject"}}</th><td>{{$p.Cert.Subject}}{{if $p.Cert.SelfSigned}} <span class="badge">{{.T "trust.self_signed"}}</span>{{end}}</td></tr>
+    <tr><th>{{.T "trust.valid_until"}}</th><td>{{$p.Cert.NotAfter.Format "2006-01-02"}}</td></tr>
+    <tr><th>{{.T "trust.key"}}</th><td>{{$p.Cert.KeyBits}} bit</td></tr>
+    {{with $p.Best}}<tr><th>{{$.T "trust.tls"}}</th><td>{{.Version}}, {{.Cipher}}
+      {{if ne .Version "TLS 1.3"}}{{if ne .Version "TLS 1.2"}} <span class="badge badge-warn">{{$.T "trust.old_tls"}}</span>{{end}}{{end}}</td></tr>{{end}}
+  </table>
+  <p class="small muted">{{.T "trust.compare"}}</p>
+  {{if .Can "admin"}}
+  <form method="post" action="/admin/devices/{{$d.ID}}/tls" class="actions">
+    <input type="hidden" name="_csrf" value="{{.CSRF}}">
+    <input type="hidden" name="pin" value="{{$p.Cert.Fingerprint}}">
+    <input type="hidden" name="back" value="/open/{{$d.ID}}">
+    <button type="submit" class="primary">{{.T "trust.confirm"}}</button>
+  </form>
+  {{else}}
+  <p class="alert alert-warn">{{.T "trust.ask_admin"}}</p>
+  {{end}}
+  {{else}}
+  <p class="alert alert-error">{{.T "trust.failed"}}</p>
+  {{end}}
+  {{if $p}}
+  <details>
+    <summary class="small">{{.T "trust.attempts"}}</summary>
+    <table class="small">
+      {{range $p.Attempts}}<tr><td>{{.Profile}}</td><td>{{.Version}}</td><td>{{if .Err}}<span class="muted">{{.Err}}</span>{{else}}{{.Cipher}}{{end}}</td></tr>{{end}}
+    </table>
+  </details>
+  {{end}}
+</section>
+{{end}}

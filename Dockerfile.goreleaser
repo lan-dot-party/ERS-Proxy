@@ -1,0 +1,24 @@
+# ERS-Proxy image for GoReleaser (dockers_v2): the pre-built binary of each
+# platform lies in $TARGETPLATFORM/ of the build context.
+FROM alpine:3.21
+
+ARG TARGETPLATFORM
+
+RUN apk add --no-cache ca-certificates tzdata && \
+    addgroup -S ers-proxy && adduser -S -D -H -h /var/lib/ers-proxy -G ers-proxy ers-proxy && \
+    mkdir -p /etc/ers-proxy /var/lib/ers-proxy && chown ers-proxy:ers-proxy /var/lib/ers-proxy
+
+COPY $TARGETPLATFORM/ers-proxy /usr/bin/ers-proxy
+COPY packaging/docker-config.yaml /etc/ers-proxy/config.yaml
+
+ENV ERSPROXY_CONFIG=/etc/ers-proxy/config.yaml
+WORKDIR /var/lib/ers-proxy
+VOLUME /var/lib/ers-proxy
+USER ers-proxy
+EXPOSE 9050
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -q -O /dev/null http://127.0.0.1:9050/health || exit 1
+
+ENTRYPOINT ["ers-proxy"]
+CMD ["server"]

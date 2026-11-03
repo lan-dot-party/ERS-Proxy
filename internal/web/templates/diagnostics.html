@@ -1,0 +1,22 @@
+{{define "content"}}
+<h1>{{.T "diag.title"}}</h1>
+<section class="card">
+  <table class="kv">
+    <tr><th>{{.T "diag.version"}}</th><td>{{.Data.Version}}</td></tr>
+    <tr><th>{{.T "diag.origin"}}</th><td><code>{{.Data.Origin}}</code></td></tr>
+    <tr><th>{{.T "diag.transport"}}</th><td>{{if .Data.Insecure}}<span class="danger-text">{{.T "diag.http"}}</span>{{else}}HTTPS{{end}}</td></tr>
+  </table>
+</section>
+{{range .Data.Devices}}
+<section class="card">
+  <h3>{{.Name}} <span class="muted small"><code>{{.URL}}</code></span></h3>
+  <table class="kv">
+    {{range .Rows}}<tr><th>{{$.T .Label}}</th><td{{if .Warn}} class="danger-text"{{end}}>{{.Value}}</td></tr>
+    {{else}}<tr><td class="muted">{{$.T "diag.not_opened"}}</td></tr>{{end}}
+  </table>
+</section>
+{{else}}
+<section class="card"><p class="muted">{{.T "diag.no_devices"}}</p></section>
+{{end}}
+<p class="muted small">{{.T "diag.report_hint"}}</p>
+{{end}}

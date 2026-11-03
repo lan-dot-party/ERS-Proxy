@@ -1,0 +1,12 @@
+# ERS-Proxy configuration in the Docker image. Mount your own file to
+# /etc/ers-proxy/config.yaml, or set ERSPROXY_PUBLIC_URL.
+listen: 0.0.0.0:9050
+public_url: http://localhost:9050
+trusted_proxies: [127.0.0.1, "::1"]
+# Lives in the data volume and is created on first start.
+secret_key_file: /var/lib/ers-proxy/secret.key
+storage:
+  path: /var/lib/ers-proxy/ers-proxy.db
+log:
+  level: info
+  format: text

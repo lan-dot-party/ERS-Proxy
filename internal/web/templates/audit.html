@@ -1,0 +1,14 @@
+{{define "content"}}
+<h1>{{.T "audit.title"}}</h1>
+<section class="card">
+  <table>
+    <thead><tr><th>{{.T "audit.time"}}</th><th>{{.T "audit.actor"}}</th><th>{{.T "audit.action"}}</th><th>{{.T "audit.target"}}</th><th>{{.T "audit.details"}}</th><th>IP</th></tr></thead>
+    <tbody>
+    {{range .Data}}
+      <tr><td class="nowrap small">{{.At.Local.Format "2006-01-02 15:04:05"}}</td><td>{{.Actor}}</td><td><code>{{.Action}}</code></td>
+          <td>{{.Target}}</td><td class="small">{{.Details}}</td><td class="small">{{.IP}}</td></tr>
+    {{else}}<tr><td colspan="6" class="muted">{{.T "audit.none"}}</td></tr>{{end}}
+    </tbody>
+  </table>
+</section>
+{{end}}

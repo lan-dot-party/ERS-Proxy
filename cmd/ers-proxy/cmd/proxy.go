@@ -1,0 +1,111 @@
+package cmd
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/lan-dot-party/ers-proxy/internal/app"
+	"github.com/lan-dot-party/ers-proxy/internal/devices"
+	"github.com/lan-dot-party/ers-proxy/internal/edmproxy"
+	"github.com/lan-dot-party/ers-proxy/internal/monitor"
+	"github.com/lan-dot-party/ers-proxy/internal/monitor/edmsrc"
+	"github.com/lan-dot-party/ers-proxy/internal/secret"
+	"github.com/lan-dot-party/ers-proxy/internal/store"
+	"github.com/lan-dot-party/ers-proxy/internal/web"
+)
+
+// edmSessions keeps one logged-in EDM session per device for the dashboard's
+// EDM data source, so that a poll does not log in every time.
+type edmSessions struct {
+	proxy *edmproxy.Proxy
+	key   *secret.Key
+	mu    sync.Mutex
+	m     map[int64]edmEntry
+}
+
+type edmEntry struct {
+	sig string
+	s   *edmsrc.Session
+}
+
+// open implements poller.OpenFunc.
+func (e *edmSessions) open(ctx context.Context, d *store.Device) (monitor.Reader, func(), error) {
+	if !d.Proxied() {
+		return nil, nil, errors.New("the EDM data source needs an ERS switch")
+	}
+	if !d.HasCredentials() {
+		return nil, nil, errors.New("the EDM data source needs a stored EDM login (device settings)")
+	}
+	c, err := e.proxy.Client(d)
+	if err != nil {
+		return nil, nil, err
+	}
+	sig := fmt.Sprintf("%s|%s|%x", d.URL, d.TLSPin, d.Credentials)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if ent, ok := e.m[d.ID]; ok && ent.sig == sig {
+		return edmsrc.Reader{S: ent.s}, func() {}, nil
+	}
+	cred, err := devices.DecryptCredentials(e.key, d)
+	if err != nil {
+		return nil, nil, err
+	}
+	s := edmsrc.NewSession(c.Transport, c.Base().String(), cred.Username, cred.Password)
+	e.m[d.ID] = edmEntry{sig: sig, s: s}
+	return edmsrc.Reader{S: s}, func() {}, nil
+}
+
+// newProxy builds the EDM proxy and connects it to the UI.
+func newEDMSource(p *edmproxy.Proxy, key *secret.Key) func(ctx context.Context, d *store.Device) (monitor.Reader, func(), error) {
+	e := &edmSessions{proxy: p, key: key, m: map[int64]edmEntry{}}
+	return e.open
+}
+
+func newProxy(ctx context.Context, a *app.App, ui *web.Server) (*edmproxy.Proxy, error) {
+	p := edmproxy.New(ctx, a)
+	ui.Opener = p
+	ui.OnDeviceChange = p.ForgetDevice
+	ui.Diagnostics = func(d *store.Device) []web.DiagRow {
+		dg := p.Diagnostics(d.ID)
+		if dg == nil {
+			return nil
+		}
+		rows := []web.DiagRow{{Label: "diag.last_opened", Value: dg.LastOpened.Local().Format(time.DateTime)}}
+		if dg.Server != "" {
+			rows = append(rows, web.DiagRow{Label: "diag.server", Value: dg.Server})
+		}
+		if dg.TLSVersion != "" {
+			old := dg.TLSVersion != "TLS 1.2" && dg.TLSVersion != "TLS 1.3"
+			rows = append(rows, web.DiagRow{Label: "diag.tls", Value: fmt.Sprintf("%s, %s (%s)", dg.TLSVersion, dg.TLSCipher, dg.TLSProfile), Warn: old})
+		}
+		var applied []string
+		for _, n := range dg.PatchNames() {
+			applied = append(applied, fmt.Sprintf("%s ×%d", n, dg.Patches[n]))
+		}
+		if len(applied) == 0 {
+			applied = []string{"–"}
+		}
+		rows = append(rows, web.DiagRow{Label: "diag.patches", Value: strings.Join(applied, ", ")})
+		if len(dg.Ambiguous) > 0 {
+			var amb []string
+			for n := range dg.Ambiguous {
+				amb = append(amb, n)
+			}
+			rows = append(rows, web.DiagRow{Label: "diag.ambiguous", Value: strings.Join(amb, ", "), Warn: true})
+		}
+		rows = append(rows, web.DiagRow{Label: "diag.requests", Value: fmt.Sprint(dg.Requests)})
+		if !dg.AutoLogin.IsZero() {
+			rows = append(rows, web.DiagRow{Label: "diag.auto_login", Value: dg.AutoLogin.Local().Format(time.DateTime)})
+		}
+		if dg.LastError != "" {
+			rows = append(rows, web.DiagRow{Label: "diag.last_error",
+				Value: dg.LastErrorAt.Local().Format(time.DateTime) + ": " + dg.LastError, Warn: true})
+		}
+		return rows
+	}
+	return p, nil
+}

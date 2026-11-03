@@ -1,0 +1,58 @@
+{{define "content"}}
+<div class="page-head">
+  <h1>{{.T "devices.title"}}</h1>
+  <div class="actions">
+    <a class="button primary" href="/admin/devices/new">{{.T "devices.new"}}</a>
+    <a class="button" href="/admin/devices/new?kind=link">{{.T "devices.new_link"}}</a>
+  </div>
+</div>
+{{with .Data.Import}}{{if .Errors}}
+<section class="card notice">
+  <h3>{{$.T "devices.import_errors"}}</h3>
+  <ul class="small">{{range .Errors}}<li>{{.}}</li>{{end}}</ul>
+</section>
+{{end}}{{end}}
+<section class="card">
+  {{if .Data.Devices}}
+  <table>
+    <thead><tr><th>{{.T "col.name"}}</th><th>{{.T "col.group"}}</th><th>{{.T "col.kind"}}</th><th>{{.T "col.address"}}</th><th>{{.T "col.open_mode"}}</th><th></th></tr></thead>
+    <tbody>
+    {{range .Data.Devices}}
+      <tr>
+        <td><a href="/admin/devices/{{.ID}}/edit">{{.Name}}</a>{{if .Notes}}<div class="muted small">{{.Notes}}</div>{{end}}</td>
+        <td>{{if .GroupName}}{{.GroupName}}{{else}}<span class="muted">–</span>{{end}}</td>
+        <td><span class="badge">{{$.T (print "kind." .Kind)}}</span>
+          {{if and .Proxied (eq .Isolation "off")}}<span class="badge badge-warn">{{$.T "warn.isolation_off"}}</span>{{end}}</td>
+        <td><code>{{.URL}}</code>{{if and .Proxied .TLSPin}} <span class="badge" title="{{.TLSPin}}">{{$.T "devices.pinned"}}</span>{{end}}</td>
+        <td>{{$.T (print "open." .OpenMode)}}</td>
+        <td class="nowrap">
+          <a href="/admin/devices/{{.ID}}/edit">{{$.T "action.edit"}}</a>
+          <form method="post" action="/admin/devices/{{.ID}}/delete" class="inline-form" data-confirm="{{$.T "devices.delete_confirm" .Name}}">
+            <input type="hidden" name="_csrf" value="{{$.CSRF}}"><button class="link danger-text" type="submit">{{$.T "action.delete"}}</button>
+          </form>
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="muted">{{.T "devices.none"}}</p>
+  {{end}}
+</section>
+<div class="grid-2">
+<section class="card">
+  <h3>{{.T "devices.import"}}</h3>
+  <form method="post" action="/admin/devices/import" enctype="multipart/form-data" class="form-grid">
+    <input type="hidden" name="_csrf" value="{{.CSRF}}">
+    <label>{{.T "devices.import_file"}}<input type="file" name="file" accept=".json,.csv,application/json,text/csv" required></label>
+    <div class="actions"><button type="submit">{{.T "devices.import_submit"}}</button></div>
+  </form>
+  <p class="muted small">{{.T "devices.import_hint"}}</p>
+</section>
+<section class="card">
+  <h3>{{.T "devices.export"}}</h3>
+  <p class="actions"><a class="button" href="/admin/devices/export.json">JSON</a> <a class="button" href="/admin/devices/export.csv">CSV</a></p>
+  <p class="muted small">{{.T "devices.export_hint"}}</p>
+</section>
+</div>
+{{end}}

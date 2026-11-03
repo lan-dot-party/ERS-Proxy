@@ -1,0 +1,50 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problems must **not** be reported here. See SECURITY.md.
+        Remove passwords, proxy tokens (`/d/…` URLs) and IP addresses you do not want to share.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: ERS-Proxy version
+      description: Output of `ers-proxy version`, or the commit hash
+    validations:
+      required: true
+  - type: input
+    id: install
+    attributes:
+      label: Installation method and operating system
+      placeholder: ".deb on Debian 13"
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and version
+      placeholder: "Firefox 145, Chromium 156"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: For example from `journalctl -u ers-proxy`, or the browser console. Remove secrets first.
+      render: text

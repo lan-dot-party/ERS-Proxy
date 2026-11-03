@@ -1,0 +1,160 @@
+name: Release
+
+# Publishing a release in the GitHub web interface (tag vX.Y.Z, notes written
+# there) triggers this workflow. It builds binaries, .deb/.rpm/Arch/.apk
+# packages and Docker images with GoReleaser, installs every package in a clean
+# container, and only then attaches the files to the release, pushes the images
+# and writes a build provenance attestation.
+#
+# Pull requests that touch the packaging run the same build and tests as a
+# snapshot without publishing anything.
+on:
+  release:
+    types: [published]
+  pull_request:
+    paths:
+      - ".goreleaser.yaml"
+      - "Dockerfile.goreleaser"
+      - "packaging/**"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - name: Check the tag
+        if: github.event_name == 'release'
+        run: |
+          case "$GITHUB_REF_NAME" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::release tag must look like v1.2.3, got $GITHUB_REF_NAME"; exit 1 ;;
+          esac
+      - name: Test
+        run: go test -short ./...
+      - name: Build with GoReleaser (no publishing)
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: >-
+            release --clean --skip=publish,docker
+            ${{ github.event_name != 'release' && '--snapshot' || '' }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.pkg.tar.zst
+            dist/*.apk
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          retention-days: 7
+
+  test:
+    name: Install on ${{ matrix.image }}
+    needs: build
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {image: "debian:12", format: deb, setup: "apt-get update && apt-get install -y --no-install-recommends curl ca-certificates"}
+          - {image: "debian:13", format: deb, setup: "apt-get update && apt-get install -y --no-install-recommends curl ca-certificates"}
+          - {image: "ubuntu:24.04", format: deb, setup: "apt-get update && apt-get install -y --no-install-recommends curl ca-certificates"}
+          - {image: "fedora:latest", format: rpm, setup: "dnf install -y curl shadow-utils util-linux"}
+          - {image: "rockylinux:9", format: rpm, setup: "dnf install -y --allowerasing curl shadow-utils util-linux"}
+          - {image: "archlinux:latest", format: archlinux, setup: "pacman -Syu --noconfirm curl"}
+          - {image: "alpine:3.21", format: apk, setup: "apk add --no-cache curl coreutils"}
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install test requirements
+        run: ${{ matrix.setup }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - name: Install, start and remove
+        run: |
+          case "${{ matrix.format }}" in
+            deb) pkg=$(ls "$PWD"/dist/ers-proxy_*_amd64.deb) ;;
+            rpm) pkg=$(ls "$PWD"/dist/ers-proxy_*_amd64.rpm) ;;
+            archlinux) pkg=$(ls "$PWD"/dist/ers-proxy_*_amd64.pkg.tar.zst) ;;
+            apk) pkg=$(ls "$PWD"/dist/ers-proxy_*_amd64.apk) ;;
+          esac
+          sh packaging/test-install.sh "${{ matrix.format }}" "$pkg"
+
+  publish:
+    name: Publish
+    if: github.event_name == 'release'
+    needs: test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # attach files to the release
+      packages: write # push images to ghcr.io
+      id-token: write # sign the provenance attestation
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # The build is reproducible (-trimpath, commit timestamps), so this
+      # produces the same files the test job installed.
+      - name: Release with GoReleaser
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
+      - name: Summary
+        run: |
+          {
+            echo "## ERS-Proxy $GITHUB_REF_NAME"
+            echo
+            echo '```bash'
+            echo "# Debian/Ubuntu"
+            echo "curl -LO https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/ers-proxy_${GITHUB_REF_NAME#v}_amd64.deb"
+            echo "sudo apt install ./ers-proxy_${GITHUB_REF_NAME#v}_amd64.deb"
+            echo
+            echo "# Docker"
+            owner=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+            echo "docker pull ghcr.io/$owner/ers-proxy:${GITHUB_REF_NAME#v}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

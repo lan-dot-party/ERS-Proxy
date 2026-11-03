@@ -1,0 +1,54 @@
+{{define "content"}}
+<div class="workspace" id="workspace">
+  <aside class="sidebar" id="sidebar" aria-label="{{.T "ws.devices"}}"
+    data-label-up="{{.T "status.up"}}" data-label-down="{{.T "status.down"}}" data-label-off="{{.T "status.off"}}" data-label-unknown="{{.T "status.unknown"}}" data-label-cert="{{.T "status.cert"}}">
+    <div class="sidebar-head">
+      <input type="search" id="device-filter" placeholder="{{.T "ws.filter"}}" aria-label="{{.T "ws.filter"}}">
+      {{if .Can "admin"}}<a class="button mini" href="/admin/devices/new" title="{{.T "devices.new"}}" aria-label="{{.T "devices.new"}}">+</a>{{end}}
+    </div>
+    {{range .Data.Groups}}
+    <details class="group" open>
+      <summary>{{if .Name}}{{.Name}}{{else}}{{$.T "ws.ungrouped"}}{{end}} <span class="muted small">{{len .Devices}}</span></summary>
+      <ul class="device-list">
+        {{range .Devices}}
+        <li class="device" data-name="{{.Name}} {{.URL}} {{.GroupName}}">
+          <span class="dot dot-unknown" data-status="{{.ID}}" title="{{$.T "status.unknown"}}"></span>
+          <a class="device-open" href="{{.Href}}" data-id="{{.ID}}" data-kind="{{.Kind}}" data-mode="{{.Mode}}" data-name="{{.Name}}"
+             {{if eq .Kind "link"}}rel="noopener noreferrer" referrerpolicy="no-referrer"{{end}}>{{.Name}}</a>
+          {{if .Warn}}<span class="badge badge-warn" title="{{$.T (print "warn." .Warn)}}">!</span>{{end}}
+          <span class="device-actions">
+            <a class="icon-link" href="{{.Href}}" target="_blank" rel="noopener noreferrer" data-open-as="tab" title="{{$.T "ws.open_tab"}}" aria-label="{{$.T "ws.open_tab"}}">↗</a>
+            <a class="icon-link" href="{{.Href}}" data-open-as="window" data-id="{{.ID}}" title="{{$.T "ws.open_window"}}" aria-label="{{$.T "ws.open_window"}}">⊡</a>
+            {{if $.Can "admin"}}<a class="icon-link" href="/admin/devices/{{.ID}}/edit" title="{{$.T "action.edit"}}" aria-label="{{$.T "action.edit"}}">✎</a>{{end}}
+          </span>
+        </li>
+        {{end}}
+      </ul>
+    </details>
+    {{else}}
+    <p class="muted small sidebar-empty">{{.T "ws.no_devices"}}</p>
+    {{end}}
+  </aside>
+  <section class="main-pane">
+    <div class="tabbar" role="tablist" id="tabbar"></div>
+    <div class="panes" id="panes">
+      <div class="pane-empty" id="pane-empty">
+        <h2>{{.T "ws.welcome"}}</h2>
+        {{if .Data.Count}}<p class="muted">{{.T "ws.hint"}}</p>
+        {{else if .Can "admin"}}<p class="muted">{{.T "ws.first_device"}}</p>
+          <p><a class="button primary" href="/admin/devices/new">{{.T "devices.new"}}</a>
+             <a class="button" href="/admin/devices/new?kind=link">{{.T "devices.new_link"}}</a></p>
+        {{else}}<p class="muted">{{.T "ws.ask_admin"}}</p>{{end}}
+      </div>
+    </div>
+  </section>
+</div>
+<template id="tab-template">
+  <div class="tab" role="tab">
+    <button type="button" class="tab-title"></button>
+    <button type="button" class="tab-btn" data-act="reload" title="{{.T "ws.reload"}}" aria-label="{{.T "ws.reload"}}">⟳</button>
+    <button type="button" class="tab-btn" data-act="popout" title="{{.T "ws.popout"}}" aria-label="{{.T "ws.popout"}}">⊡</button>
+    <button type="button" class="tab-btn" data-act="close" title="{{.T "ws.close"}}" aria-label="{{.T "ws.close"}}">×</button>
+  </div>
+</template>
+{{end}}
