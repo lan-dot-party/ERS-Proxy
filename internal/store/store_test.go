@@ -136,3 +136,27 @@ func TestDeviceMonitoringFields(t *testing.T) {
 		t.Fatal("SNMP credentials not stored")
 	}
 }
+
+func TestDeviceCredentialsAutoLogin(t *testing.T) {
+	ctx := context.Background()
+	db := openTest(t)
+	for kind, want := range map[string]bool{KindERS: true, KindVSP: true, KindEDMDirect: false} {
+		d := &Device{Name: kind, Kind: kind, URL: "https://192.0.2.1", OpenMode: OpenInherit, Isolation: IsolationSandbox,
+			TLSMode: TLSAuto, MonitorSource: MonitorNone, MonitorDriver: "auto", MonitorInterval: 60, SNMPVersion: "v2c", SNMPPort: 161}
+		if err := db.CreateDevice(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.SetDeviceCredentials(ctx, d.ID, []byte("enc")); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := db.DeviceByID(ctx, d.ID); got.AutoLogin != want {
+			t.Errorf("%s: auto-login %v after storing a login, want %v", kind, got.AutoLogin, want)
+		}
+		if err := db.SetDeviceCredentials(ctx, d.ID, nil); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := db.DeviceByID(ctx, d.ID); got.AutoLogin {
+			t.Errorf("%s: auto-login still on after clearing the login", kind)
+		}
+	}
+}

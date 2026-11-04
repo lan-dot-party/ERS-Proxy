@@ -23,7 +23,7 @@
         <td>{{if .GroupName}}{{.GroupName}}{{else}}<span class="muted">–</span>{{end}}</td>
         <td><span class="badge">{{$.T (print "kind." .Kind)}}</span>
           {{if and .Proxied (eq .Isolation "off")}}<span class="badge badge-warn">{{$.T "warn.isolation_off"}}</span>{{end}}</td>
-        <td><code>{{.URL}}</code>{{if and .Proxied .TLSPin}} <span class="badge" title="{{.TLSPin}}">{{$.T "devices.pinned"}}</span>{{end}}</td>
+        <td><code>{{.URL}}</code>{{if and .EDM .TLSPin}} <span class="badge" title="{{.TLSPin}}">{{$.T "devices.pinned"}}</span>{{end}}</td>
         <td>{{$.T (print "open." .OpenMode)}}</td>
         <td class="nowrap">
           <a href="/admin/devices/{{.ID}}/edit">{{$.T "action.edit"}}</a>

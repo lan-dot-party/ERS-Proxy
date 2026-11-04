@@ -27,6 +27,10 @@ func TestNormalize(t *testing.T) {
 		{store.KindERS, "http://admin:pw@192.0.2.10", "", false},
 		{store.KindERS, "http://192.0.2.10:99999", "", false},
 		{store.KindERS, "http://[2001:db8::1]:8080", "http://[2001:db8::1]:8080", true},
+		{store.KindEDMDirect, "192.0.2.10", "http://192.0.2.10", true},
+		{store.KindEDMDirect, "HTTPS://Vsp.example:8443/", "https://vsp.example:8443", true},
+		{store.KindEDMDirect, "http://192.0.2.10/login.html", "", false},
+		{store.KindEDMDirect, "http://admin:pw@192.0.2.10", "", false},
 		{store.KindLink, "https://fw.example/ui/?x=1", "https://fw.example/ui/?x=1", true},
 		{store.KindLink, "https://ap.example", "https://ap.example/", true},
 		{"router", "https://ap.example", "", false},
@@ -269,6 +273,97 @@ func TestMonitoringExportImport(t *testing.T) {
 	d := devs[0]
 	if d.MonitorSource != store.MonitorSNMP || d.MonitorDriver != store.DriverCisco || d.MonitorInterval != 120 ||
 		d.SNMPVersion != store.SNMPv3 || d.SNMPPort != 1161 || d.HasSNMPCredentials() {
+		t.Fatalf("round trip: %+v", d)
+	}
+}
+
+func TestNormalizeEDMDirect(t *testing.T) {
+	pin := strings.Repeat("ab", 32)
+	d := &store.Device{Name: "vsp", Kind: store.KindEDMDirect, URL: "vsp.example", Isolation: store.IsolationOff,
+		AutoLogin: true, TLSMode: store.TLSLegacy, TLSPin: pin}
+	if err := Normalize(d); err != nil {
+		t.Fatal(err)
+	}
+	if d.Isolation != store.IsolationSandbox || d.AutoLogin || d.TLSMode != store.TLSLegacy || d.TLSPin != pin {
+		t.Fatalf("edm-direct: isolation=%q auto=%v tls=%q pin=%q", d.Isolation, d.AutoLogin, d.TLSMode, d.TLSPin)
+	}
+	if !d.Direct() || !d.EDM() || d.Proxied() {
+		t.Fatal("kind helpers for edm-direct")
+	}
+	var fe *FieldError
+	if err := Normalize(&store.Device{Name: "x", Kind: store.KindEDMDirect, URL: "a", TLSPin: "zz"}); !errors.As(err, &fe) || fe.Key != "tls_pin" {
+		t.Fatalf("pin validation: %v", err)
+	}
+	for kind, want := range map[string][4]bool{store.KindERS: {false, true, true, false}, store.KindLink: {true, false, false, false},
+		store.KindEDMDirect: {true, true, false, true}, store.KindVSP: {false, true, true, true}} {
+		x := &store.Device{Kind: kind}
+		if x.Direct() != want[0] || x.EDM() != want[1] || x.Proxied() != want[2] || x.VOSS() != want[3] {
+			t.Errorf("%s: Direct/EDM/Proxied/VOSS = %v/%v/%v/%v", kind, x.Direct(), x.EDM(), x.Proxied(), x.VOSS())
+		}
+	}
+	// vsp-edm is proxied: isolation and auto-login are kept.
+	v := &store.Device{Name: "vsp", Kind: store.KindVSP, URL: "vsp.example", Isolation: store.IsolationSandbox, AutoLogin: true,
+		MonitorSource: store.MonitorEDM}
+	if err := Normalize(v); err != nil || v.URL != "http://vsp.example" || !v.AutoLogin {
+		t.Fatalf("vsp-edm: %v %q auto=%v", err, v.URL, v.AutoLogin)
+	}
+	// Monitoring: EDM source allowed, VOSS driver accepted.
+	d = &store.Device{Name: "vsp", Kind: store.KindEDMDirect, URL: "vsp.example", MonitorSource: store.MonitorEDM, MonitorDriver: store.DriverVOSS}
+	if err := Normalize(d); err != nil {
+		t.Fatalf("edm source on edm-direct: %v", err)
+	}
+	d = &store.Device{Name: "l", Kind: store.KindLink, URL: "https://x.example", MonitorSource: store.MonitorEDM}
+	if err := Normalize(d); !errors.As(err, &fe) || fe.Key != "monitor_source" {
+		t.Fatalf("edm source on link: %v", err)
+	}
+}
+
+func TestEDMDirectExportImport(t *testing.T) {
+	ctx := context.Background()
+	open := func() *store.DB {
+		db, err := store.Open(store.Options{Path: filepath.Join(t.TempDir(), "t.db")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { db.Close() })
+		if err := db.Migrate(ctx, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+			t.Fatal(err)
+		}
+		return db
+	}
+	pin := strings.Repeat("cd", 32)
+	src := open()
+	in := &Export{Version: ExportVersion, Devices: []ExportDevice{{Name: "vsp", Kind: store.KindEDMDirect, URL: "https://vsp.example",
+		Isolation: store.IsolationOff, TLSMode: store.TLSLegacy, TLSPin: pin}}}
+	if res, err := Import(ctx, src, in); err != nil || res.Created != 1 {
+		t.Fatalf("import: %+v %v", res, err)
+	}
+	out, err := Build(ctx, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Devices) != 1 {
+		t.Fatalf("devices: %d", len(out.Devices))
+	}
+	ed := out.Devices[0]
+	if ed.Kind != store.KindEDMDirect || ed.TLSMode != store.TLSLegacy || ed.TLSPin != pin || ed.Isolation != "" {
+		t.Fatalf("export: %+v", ed)
+	}
+	var buf bytes.Buffer
+	if err := WriteJSON(&buf, out); err != nil {
+		t.Fatal(err)
+	}
+	back, err := ReadJSON(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := open()
+	if res, err := Import(ctx, dst, back); err != nil || res.Created != 1 {
+		t.Fatalf("re-import: %+v %v", res, err)
+	}
+	devs, _ := dst.ListDevices(ctx)
+	d := devs[0]
+	if d.Kind != store.KindEDMDirect || d.TLSMode != store.TLSLegacy || d.TLSPin != pin || d.Isolation != store.IsolationSandbox {
 		t.Fatalf("round trip: %+v", d)
 	}
 }

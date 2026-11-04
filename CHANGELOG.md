@@ -8,6 +8,24 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- "Open in EDM" for a port left `TypeError` messages in the console on VOSS 8 while EDM was
+  still loading; the shim now calls EDM's click handlers directly and keeps such early failures
+  to itself while it retries.
+- Auto-login and the EDM data source stopped at VOSS 8 ("the switch did not set the auth
+  cookie"): its login page sets no nonce cookie. For VOSS the login now goes ahead with an
+  empty nonce, as the switch's own login form does; ERS still requires the cookie.
+- Opening a proxied device again (workspace reload, "Open in EDM" from the dashboard) logged in
+  at the switch every time and left the old EDM session behind; VSP switches answer `503 Server
+  Too Busy` after a few. A proxy session of the same portal login used in the last 10 minutes
+  is now reused, unless EDM was logged out in it.
+- `edm-direct` devices (VSP/VOSS) no longer open embedded in the workspace, but in a new tab
+  (or the window mode). In a frame the switch is a third party: the browser showed no
+  certificate warning (the frame stayed empty) and dropped the switch's `auth` login cookie, so
+  the login failed with "Authentication Failed". Storing an EDM login for such a device no
+  longer turns on auto-login, which only proxied devices have; the device form says so.
+- Ports without link showed "half" duplex on ERS and VSP switches (`rcPortOperDuplex` reports
+  half duplex for them); duplex from the RAPID-CITY port table is now only shown for ports that
+  are up.
 - EDM login through the proxy did nothing after clicking *Log On* on a real ERS 5600: browsers
   send `Cache-Control: max-age=0` with the form submit, and the switch answers every such
   request with an empty `304 Not Modified`, even a POST. The proxy no longer forwards the
@@ -53,6 +71,45 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ports; the synthetic `ers5600` fixture now contains such a port.
 
 ### Added
+
+- Browser test `tools/e2e/edm_e2e.py` also runs in Firefox (`E2E_BROWSER=firefox`, geckodriver;
+  JavaScript errors through WebDriver BiDi) and WebKitGTK, Safari's engine (`E2E_BROWSER=webkit`,
+  webkit2gtk-driver, under `xvfb-run`). Verified with Firefox ESR 153 and WebKitGTK 2.54 against
+  the mock switch and on the VSPs.
+- SNMPv3 integration tests against snmpsim (`snmptest.SimulatorV3`): noAuthNoPriv and
+  authNoPriv with MD5, SHA and SHA-256, and a wrong password. authPriv cases are skipped because
+  snmpsim cannot decrypt them (`ERSPROXY_SNMPSIM_PRIV=1` runs them).
+- SNMP access can be entered when a device is added. The SNMP version (v2c/v3) is now chosen in
+  the SNMP access card together with the credentials instead of being saved first in the main
+  form; the card shows only the fields of the chosen version and v3 security level.
+- "Open in EDM" for a port (dashboard panel and port page) now opens that port: EDM selects it
+  in the device view and opens its edit dialog (verified on a VSP 4850GTS; ERS through the same
+  `Port_<ifIndex>` elements, not yet verified on hardware). Verified on VOSS 7.1 and 8.10; the
+  double-click is repeated until the dialog appears, since VOSS 8 ignores it while still
+  loading the port data.
+- Device kind `vsp-edm`: a VSP switch with VOSS whose EDM runs through the proxy like an ERS –
+  embedded in the workspace, with auto-login and the certificate pinned on the server (verified
+  on a VSP 4850GTS with VOSS 7.1.10.0). `edm-direct` remains for opening a VSP directly.
+- The shim provides `localStorage` and `sessionStorage` in the sandbox, kept per proxy session
+  and never sent to the switch. VOSS's login page needs them: without, it stored the user name
+  in a cookie that reached the switch, and the login failed.
+- Extreme VSP switches with VOSS (verified on a VSP 4850GTS, VOSS 7.1.10.0):
+  - New device kind `edm-direct` ("EDM switch, opened directly"): the browser opens the switch
+    by its URL like a link (VOSS's EDM works in current browsers), while TLS mode, certificate
+    pin, stored login and the EDM data source work as for `ers-edm`. The certificate is confirmed
+    from the device's edit page (*Check and confirm certificate*). No migration needed.
+  - Port dashboard driver `voss` (`sysObjectID` 1.3.6.1.4.1.2272.): front-panel slot/port from
+    `ifName`, RAPID-CITY VLANs, PVID and tagging, speed/duplex from `rcPortTable`, MLT, chassis
+    serial and release. Synthetic `voss.snmprec`.
+  - EDM login in the VOSS variant (`encode_vrf`: one form POST, no length prefix, no
+    15-character limit), detected from the login page.
+  - `upstream.Options.KeepAlive`: requests to VOSS devices (`edm-direct`, `vsp-edm`) say
+    `Connection: keep-alive`; VOSS's web server resets connections it is asked to close and the
+    answer is lost.
+  - EDM data source: object names the switch cannot resolve (`Oid_Conversion_Fail`; VOSS lacks
+    `ifName`, `ifType`, `ifHighSpeed`) are left out for the session instead of truncating the
+    table to one row; a replaced session is logged out (`/logout.html`), since VOSS allows only a
+    few web sessions.
 
 - Image cache in the EDM proxy: images of a device are kept in memory (up to 8 MiB per device)
   and served from there on later EDM starts. Each start used to fetch a few hundred images again

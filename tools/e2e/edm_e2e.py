@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Browser test: EDM through ERS-Proxy in headless Chromium.
+"""Browser test: EDM through ERS-Proxy in headless Chromium or Firefox.
 
 Runs only locally, against a mock switch that serves a real EDM webroot (which
 is not part of this repository):
@@ -16,7 +16,11 @@ Checks:
   * every request the EDM makes stays below /d/{token}/,
   * an export window (window.open("") + document.write) gets its content.
 
-Needs: python3-selenium, chromium, chromium-driver (Debian packages).
+Needs: python3-selenium (4.16 or newer for Firefox), chromium and chromium-driver, or
+firefox(-esr) and geckodriver with E2E_BROWSER=firefox, or webkit2gtk-driver with
+E2E_BROWSER=webkit (WebKitGTK, Safari's engine; needs a display, e.g. xvfb-run). In Firefox,
+JavaScript errors come through WebDriver BiDi; WebKitWebDriver offers no console log. The
+request list comes from the EDM document's resource timing in both.
 Exit code 0 when all checks pass.
 """
 import json
@@ -25,20 +29,46 @@ import time
 
 from selenium import webdriver
 from selenium.common.exceptions import NoAlertPresentException
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 
 base, user, password, device_id, shots = sys.argv[1:6]
 switch_user = sys.argv[6] if len(sys.argv) > 6 else "RW"
 switch_password = sys.argv[7] if len(sys.argv) > 7 else "secure"
 
-opts = Options()
-for a in ["--headless=new", "--no-sandbox", "--disable-gpu", "--window-size=1600,1000"]:
-    opts.add_argument(a)
-opts.set_capability("goog:loggingPrefs", {"browser": "ALL", "performance": "ALL"})
-opts.set_capability("unhandledPromptBehavior", "accept")
-drv = webdriver.Chrome(service=Service("/usr/bin/chromedriver"), options=opts)
+BROWSER = __import__("os").environ.get("E2E_BROWSER", "chromium")
+FIREFOX = BROWSER == "firefox"
+WEBKIT = BROWSER == "webkit"  # WebKitGTK, Safari's engine
+js_errors = []  # Firefox: JavaScript errors reported through WebDriver BiDi
+
+if WEBKIT:
+    from selenium.webdriver.webkitgtk.service import Service
+    opts = webdriver.WebKitGTKOptions()
+    opts.binary_location = __import__("os").environ.get(
+        "E2E_WEBKIT_BROWSER", "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/MiniBrowser")
+    opts.add_argument("--automation")
+    opts.set_capability("unhandledPromptBehavior", "accept")
+    drv = webdriver.WebKitGTK(service=Service("/usr/bin/WebKitWebDriver"), options=opts)
+    drv.set_window_size(1600, 1000)
+elif FIREFOX:
+    from selenium.webdriver.firefox.options import Options
+    from selenium.webdriver.firefox.service import Service
+    opts = Options()
+    for a in ["-headless", "--width=1600", "--height=1000"]:
+        opts.add_argument(a)
+    opts.enable_bidi = True
+    opts.set_capability("unhandledPromptBehavior", "accept")
+    drv = webdriver.Firefox(service=Service("/usr/bin/geckodriver"), options=opts)
+    drv.script.add_javascript_error_handler(lambda e: js_errors.append(getattr(e, "text", str(e))))
+else:
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service
+    opts = Options()
+    for a in ["--headless=new", "--no-sandbox", "--disable-gpu", "--window-size=1600,1000"]:
+        opts.add_argument(a)
+    opts.set_capability("goog:loggingPrefs", {"browser": "ALL", "performance": "ALL"})
+    opts.set_capability("unhandledPromptBehavior", "accept")
+    drv = webdriver.Chrome(service=Service("/usr/bin/chromedriver"), options=opts)
+print("BROWSER", drv.capabilities.get("browserName"), drv.capabilities.get("browserVersion"))
 failures = []
 
 
@@ -46,6 +76,21 @@ def check(ok, msg):
     print(("PASS " if ok else "FAIL ") + msg)
     if not ok:
         failures.append(msg)
+
+
+def fill(el, text):
+    """Type into a field; WebKitWebDriver cannot focus fields inside the sandboxed frame."""
+    if WEBKIT:
+        drv.execute_script("arguments[0].value = arguments[1]", el, text)
+    else:
+        el.send_keys(text)
+
+
+def press(el):
+    if WEBKIT:
+        drv.execute_script("arguments[0].click()", el)
+    else:
+        el.click()
 
 
 def accept_alerts(seconds):
@@ -64,6 +109,10 @@ VERBOSE = bool(__import__("os").environ.get("E2E_VERBOSE"))
 
 
 def console_errors():
+    if WEBKIT:
+        return []  # WebKitWebDriver has no console log; the functional checks cover it
+    if FIREFOX:
+        return list(js_errors)
     errs = []
     for e in drv.get_log("browser"):
         if VERBOSE:
@@ -82,7 +131,8 @@ try:
     drv.execute_script("try{localStorage.removeItem('ersp.tabs')}catch(e){}")
     drv.get(base + "/")
     time.sleep(1)
-    drv.get_log("performance")  # discard the portal's own requests
+    if not FIREFOX and not WEBKIT:
+        drv.get_log("performance")  # discard the portal's own requests
     link = drv.find_element(By.CSS_SELECTOR, '.device-open[data-id="%s"]' % device_id)
     drv.execute_script("arguments[0].dataset.mode='embedded'", link)
     link.click()
@@ -93,10 +143,10 @@ try:
     check(frame_url.startswith(base + "/d/"), "tab shows the proxy path")
     time.sleep(1)
     if drv.find_elements(By.NAME, "username"):
-        drv.find_element(By.NAME, "username").send_keys(switch_user)
-        drv.find_element(By.NAME, "password").send_keys(switch_password)
+        fill(drv.find_element(By.NAME, "username"), switch_user)
+        fill(drv.find_element(By.NAME, "password"), switch_password)
         drv.save_screenshot(shots + "/e2e-1-login.png")
-        drv.find_element(By.NAME, "goto").click()
+        press(drv.find_element(By.NAME, "goto"))
     else:
         print("INFO no EDM login form (automatic login)")
     accept_alerts(10)
@@ -155,15 +205,20 @@ try:
     check("e2e-export" in popup_text, "export window receives the written content")
     drv.switch_to.default_content()
 
-    outside = []
-    for entry in drv.get_log("performance"):
-        msg = json.loads(entry["message"])["message"]
-        if msg.get("method") != "Network.requestWillBeSent":
-            continue
-        url = msg["params"]["request"]["url"]
-        if url.startswith(base) and not url.startswith(base + "/d/") and not url.startswith(base + "/open/") \
-                and not url.startswith(base + "/admin/devices"):
-            outside.append(url)
+    if FIREFOX or WEBKIT:
+        # Requests of the EDM document (resource timing includes XHRs).
+        drv.switch_to.frame(drv.find_element(By.CSS_SELECTOR, "iframe.pane"))
+        urls = drv.execute_script("return performance.getEntriesByType('resource').map(function (e) { return e.name; })")
+        drv.switch_to.default_content()
+        print("EDM requests seen:", len(urls))
+    else:
+        urls = []
+        for entry in drv.get_log("performance"):
+            msg = json.loads(entry["message"])["message"]
+            if msg.get("method") == "Network.requestWillBeSent":
+                urls.append(msg["params"]["request"]["url"])
+    outside = [u for u in urls if u.startswith(base) and not u.startswith(base + "/d/")
+               and not u.startswith(base + "/open/") and not u.startswith(base + "/admin/devices")]
     check(not outside, "all EDM requests stay below /d/ %s" % (outside[:5] if outside else ""))
     errs = console_errors()
     errs = [e for e in errs if "/admin/devices" not in e]  # the deliberate probe above

@@ -12,8 +12,15 @@ import (
 const (
 	// KindERS is an Avaya/Extreme ERS switch whose EDM is served through the proxy.
 	KindERS = "ers-edm"
+	// KindVSP is a VSP switch with VOSS whose EDM is served through the proxy
+	// (embedded with auto-login, like an ERS).
+	KindVSP = "vsp-edm"
 	// KindLink is any other device, opened directly by its URL.
 	KindLink = "link"
+	// KindEDMDirect is a switch with an EDM that works in current browsers
+	// (VSP with VOSS): the browser opens it directly like a link, while the
+	// server still talks to its EDM for the dashboard's EDM data source.
+	KindEDMDirect = "edm-direct"
 )
 
 // Isolation modes for proxied devices.
@@ -43,6 +50,7 @@ const (
 	DriverERS     = "ers"
 	DriverCisco   = "cisco"
 	DriverTPLink  = "tplink"
+	DriverVOSS    = "voss"
 )
 
 // SNMP versions.
@@ -103,7 +111,20 @@ func (d *Device) HasCredentials() bool { return len(d.Credentials) > 0 }
 func (d *Device) HasSNMPCredentials() bool { return len(d.SNMPCredentials) > 0 }
 
 // Proxied reports whether the device is served through the EDM proxy.
-func (d *Device) Proxied() bool { return d.Kind == KindERS }
+func (d *Device) Proxied() bool { return d.Kind == KindERS || d.Kind == KindVSP }
+
+// VOSS reports whether the device runs VOSS (vsp-edm and edm-direct): its
+// web server resets connections it is asked to close.
+func (d *Device) VOSS() bool { return d.Kind == KindVSP || d.Kind == KindEDMDirect }
+
+// Direct reports whether the browser opens the device by its URL (link and
+// edm-direct devices).
+func (d *Device) Direct() bool { return d.Kind == KindLink || d.Kind == KindEDMDirect }
+
+// EDM reports whether the server talks to the device's EDM: TLS settings,
+// certificate pin, stored login and the EDM data source apply (ers-edm,
+// vsp-edm and edm-direct devices).
+func (d *Device) EDM() bool { return d.Proxied() || d.Kind == KindEDMDirect }
 
 const deviceCols = `d.id, COALESCE(d.group_id, 0), COALESCE(g.name, ''), d.name, d.kind, d.url, d.open_mode, d.isolation,
 	d.tls_mode, d.tls_pin, d.tls_profile, d.credentials, d.auto_login, d.health_enabled, d.notes, d.sort,
@@ -175,9 +196,12 @@ func (db *DB) UpdateDevice(ctx context.Context, d *Device) error {
 
 // SetDeviceCredentials stores (or with nil removes) the encrypted login.
 func (db *DB) SetDeviceCredentials(ctx context.Context, id int64, enc []byte) error {
-	// Storing a login turns auto-login on; removing it turns it off.
-	_, err := db.sql.ExecContext(ctx, `UPDATE devices SET credentials = ?, auto_login = ?, updated_at = ? WHERE id = ?`,
-		enc, boolInt(enc != nil), unix(Now()), id)
+	// Storing a login turns auto-login on for proxied devices; removing it
+	// turns it off. edm-direct devices have no auto-login (the browser logs in
+	// at the switch itself).
+	_, err := db.sql.ExecContext(ctx, `UPDATE devices SET credentials = ?,
+		auto_login = CASE WHEN kind IN (?, ?) THEN ? ELSE 0 END, updated_at = ? WHERE id = ?`,
+		enc, KindERS, KindVSP, boolInt(enc != nil), unix(Now()), id)
 	return err
 }
 

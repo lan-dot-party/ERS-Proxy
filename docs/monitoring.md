@@ -18,7 +18,9 @@ and duplex, VLANs, PoE, link aggregation, LLDP neighbour and traffic with stored
   - **Search** by port, alias, LAG name or LLDP neighbour name.
   - Clicking a tile opens the **port panel**: state, speed, duplex, PVID, untagged and tagged
     VLANs, mode, PoE (status, class), LAG, LLDP neighbour, utilisation, error and discard
-    counters, time of the last change, and a link to open the switch in EDM.
+    counters, time of the last change, and a link to open the switch in EDM. For switches
+    served through the proxy (`ers-edm`, `vsp-edm`) EDM then selects the port and opens its
+    edit dialog (also from the port page); `edm-direct` devices open without the port.
   - The page updates itself; a card shows the last poll time, uptime, ports up, the PoE
     budget and, after a failed poll, the error.
 - **Switch page**: model, firmware and serial number per stack unit, port table, VLAN table
@@ -34,17 +36,24 @@ In the device form (admin), section **Monitoring**:
 | Field | Meaning |
 |---|---|
 | Source | `none` (default), `snmp`, or `edm` (see below). |
-| Driver | `auto` detects the driver from `sysObjectID` once per polling loop; or fix `generic`, `ers`, `cisco` or `tplink`. See [compatibility.md](compatibility.md). |
+| Driver | `auto` detects the driver from `sysObjectID` once per polling loop; or fix `generic`, `ers`, `cisco`, `tplink` or `voss`. See [compatibility.md](compatibility.md). |
 | Interval | 30–3600 seconds, default 60. |
-| SNMP version, SNMP port | `v2c` or `v3`; port 161 by default. The version must be saved before the credentials can be entered. |
+| SNMP port | Port 161 by default. |
 
-The SNMP host is the host of the device URL. Save the device, then use the card **SNMP access**
-on the edit page:
+The SNMP host is the host of the device URL. The SNMP version and the credentials are entered
+together: when adding a device (optional, section **SNMP access** of the form) or later in the
+card **SNMP access** on the edit page. Switching the version there (v2c ↔ v3) replaces the
+stored credentials; the form shows only the fields of the chosen version and security level.
 
+- Entering credentials needs the admin's own password (re-authentication, see
+  [security.md](security.md)); when adding a device only if SNMP data is entered.
 - v2c: the community. v3: user name, security level (`noAuthNoPriv`, `authNoPriv`,
   `authPriv`), authentication protocol (MD5, SHA, SHA-224/256/384/512) and password, privacy
   protocol (DES, AES-128/192/256) and password, optional context name. v3 passwords need at
-  least 8 characters.
+  least 8 characters. Verified against snmpsim (`internal/snmp/v3_integration_test.go`):
+  noAuthNoPriv and authNoPriv (MD5, SHA, SHA-256); authPriv is not verified yet – snmpsim
+  cannot decrypt authPriv requests (net-snmp fails against it the same way), and no switch
+  with an SNMPv3 user has been tested.
 - The card is **write-only**: stored values are never shown again, and setting or deleting
   them requires re-entering your own password.
 - The credentials are encrypted and bound to the device, its host and its SNMP port. If you
@@ -54,12 +63,14 @@ on the edit page:
 Changes take effect within a minute; the poller restarts the loop of a device whenever its
 monitoring settings or credentials change.
 
-### EDM source (ERS only, experimental)
+### EDM source (ERS and VSP, experimental)
 
-For ERS switches whose SNMP agent is not reachable, the source `edm` reads the same MIB objects
-through the switch's web interface (`getFormMibs.jsp`, `getTableMibs.jsp`). It
+For ERS and VSP switches whose SNMP agent is not reachable, the source `edm` reads the same MIB
+objects through the switch's web interface (`getFormMibs.jsp`, `getTableMibs.jsp`). It
 
-- works only for devices of kind `ers-edm` and needs the **stored EDM login** of the device;
+- works only for devices of kind `ers-edm`, `vsp-edm` or `edm-direct` and needs the **stored EDM login**
+  of the device; over HTTPS the certificate must be confirmed first (for `edm-direct` on the
+  device's edit page);
 - keeps one logged-in session on the server and sends one request at a time;
 - needs an interval of at least 60 seconds;
 - cannot provide PoE or EtherLike duplex (and no Q-BRIDGE data); duplex and speed come from the
@@ -68,8 +79,14 @@ through the switch's web interface (`getFormMibs.jsp`, `getTableMibs.jsp`). It
   not-accessible);
 - stops logging in after the switch rejected the stored login, until the login is changed (ERS
   switches lock the account after a few failed logins);
+- leaves out object names the switch cannot resolve (it answers `Oid_Conversion_Fail`) for the
+  rest of the session. VOSS's EDM knows neither `ifName`, `ifType` nor `ifHighSpeed`; the `voss`
+  driver then takes slot/port from `ifDescr` and 10G speeds from `rcPortOperSpeed`;
+- logs the old session out (`/logout.html`) when the device's address, pin or login changes –
+  VSP switches allow only a few web sessions and answer `503 Server Too Busy` beyond that;
 - uses only read commands. The request formats come from the EDM code of firmware 6.6.3 and were
-  verified on an ERS 5632FD: ports, VLANs, tagging, unit and LLDP match the SNMP source. A
+  verified on an ERS 5632FD and a VSP 4850GTS (VOSS 7.1.10.0): ports, VLANs, tagging, unit and
+  LLDP match the SNMP source. A
   browser session in EDM works at the same time; during an EDM start the switch may answer a
   poll with `HTTP 503` or refuse connections for a few seconds (the next poll works).
 

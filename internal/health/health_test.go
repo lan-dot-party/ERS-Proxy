@@ -5,10 +5,12 @@ import (
 	"crypto/tls"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -96,5 +98,56 @@ func TestRound(t *testing.T) {
 	}
 	if s, emb := c.Status(999); s != StateUnknown || !emb {
 		t.Errorf("unknown device: %s %v", s, emb)
+	}
+}
+
+// An edm-direct device is checked like an ERS switch (TCP connect), not with
+// an HTTP request like a link.
+func TestRoundEDMDirectNoHTTP(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(store.Options{Path: filepath.Join(t.TempDir(), "t.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := db.Migrate(ctx, log); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got atomic.Int64
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				_ = c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+				n, _ := c.Read(make([]byte, 512))
+				got.Add(int64(n))
+			}()
+		}
+	}()
+	defer ln.Close()
+	d := &store.Device{Name: "vsp", Kind: store.KindEDMDirect, URL: "http://" + ln.Addr().String(), HealthEnabled: true,
+		OpenMode: store.OpenInherit, Isolation: store.IsolationSandbox, TLSMode: store.TLSAuto}
+	if err := db.CreateDevice(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Health.Timeout = 3 * time.Second
+	c := New(db, cfg, log)
+	c.Round(ctx)
+	if s, _ := c.Status(d.ID); s != StateUp {
+		t.Fatalf("edm-direct: %s", s)
+	}
+	time.Sleep(700 * time.Millisecond)
+	if got.Load() != 0 {
+		t.Fatalf("health check sent %d bytes; expected a plain TCP connect", got.Load())
 	}
 }

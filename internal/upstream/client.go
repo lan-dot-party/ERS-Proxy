@@ -32,6 +32,11 @@ type Options struct {
 	Timeout time.Duration
 	// OnProfile is called when auto mode settles on another profile.
 	OnProfile func(profile string)
+	// KeepAlive sends "Connection: keep-alive" instead of "Connection:
+	// close"; the client still closes the connection after each answer. The
+	// web server of VSP switches (VOSS) resets a connection it is asked to
+	// close right after the response headers, which loses the body.
+	KeepAlive bool
 }
 
 // Client talks to one device.
@@ -72,14 +77,20 @@ func New(opts Options) (*Client, error) {
 		DialTLSContext:        c.dialTLS,
 		MaxConnsPerHost:       opts.MaxConns,
 		MaxIdleConnsPerHost:   -1,
-		DisableKeepAlives:     true, // old embedded web servers; also lets fixConn see each status line
+		DisableKeepAlives:     !opts.KeepAlive, // old embedded web servers; also lets fixConn see each status line
 		DisableCompression:    true,
 		ResponseHeaderTimeout: opts.Timeout,
 		TLSHandshakeTimeout:   opts.Timeout,
 		ForceAttemptHTTP2:     false,
 		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
 	}
-	c.Transport = &retryTransport{next: raw, delays: retryDelays, fast: fastDrop}
+	// MaxIdleConnsPerHost -1 keeps no idle connection either way, so even with
+	// KeepAlive every request gets its own connection.
+	var next http.RoundTripper = raw
+	if opts.KeepAlive {
+		next = keepAliveTransport{raw}
+	}
+	c.Transport = &retryTransport{next: next, delays: retryDelays, fast: fastDrop}
 	return c, nil
 }
 
@@ -216,4 +227,14 @@ func ReasonPhrase(resp *http.Response) string {
 		return ""
 	}
 	return reason
+}
+
+// keepAliveTransport asks the device to keep the connection open (see
+// Options.KeepAlive).
+type keepAliveTransport struct{ next http.RoundTripper }
+
+func (t keepAliveTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	r := req.Clone(req.Context())
+	r.Header.Set("Connection", "keep-alive")
+	return t.next.RoundTrip(r)
 }

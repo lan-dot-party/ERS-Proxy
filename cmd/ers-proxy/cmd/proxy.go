@@ -34,8 +34,8 @@ type edmEntry struct {
 
 // open implements poller.OpenFunc.
 func (e *edmSessions) open(ctx context.Context, d *store.Device) (monitor.Reader, func(), error) {
-	if !d.Proxied() {
-		return nil, nil, errors.New("the EDM data source needs an ERS switch")
+	if !d.EDM() {
+		return nil, nil, errors.New("the EDM data source needs an EDM switch (kind ers-edm, vsp-edm or edm-direct)")
 	}
 	if !d.HasCredentials() {
 		return nil, nil, errors.New("the EDM data source needs a stored EDM login (device settings)")
@@ -47,8 +47,17 @@ func (e *edmSessions) open(ctx context.Context, d *store.Device) (monitor.Reader
 	sig := fmt.Sprintf("%s|%s|%x", d.URL, d.TLSPin, d.Credentials)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if ent, ok := e.m[d.ID]; ok && ent.sig == sig {
+	ent, ok := e.m[d.ID]
+	if ok && ent.sig == sig {
 		return edmsrc.Reader{S: ent.s}, func() {}, nil
+	}
+	if ok {
+		// Settings or login changed: free the old session on the switch.
+		go func(old *edmsrc.Session) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			old.Logout(ctx)
+		}(ent.s)
 	}
 	cred, err := devices.DecryptCredentials(e.key, d)
 	if err != nil {

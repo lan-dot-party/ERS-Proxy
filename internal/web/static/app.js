@@ -12,16 +12,35 @@
     }
   });
 
-  // Device form: proxy settings only for ERS switches.
+  // Device form: EDM settings only for EDM switches, proxy settings only for
+  // proxied ones.
   var kind = document.getElementById("device-kind");
   if (kind) {
     var form = document.getElementById("device-form");
     var sync = function () {
       form.classList.toggle("device-kind-link", kind.value === "link");
+      form.classList.toggle("device-kind-edm-direct", kind.value === "edm-direct");
     };
     kind.addEventListener("change", sync);
     sync();
   }
+
+  // SNMP access (edit page card and new-device form): show the fields of the
+  // chosen version and security level.
+  Array.prototype.forEach.call(document.querySelectorAll(".snmp-box"), function (box) {
+    var ver = box.querySelector('select[name="snmp_version"]');
+    var level = box.querySelector('select[name="security_level"]');
+    if (!ver || !level) return;
+    var sync = function () {
+      ["v2c", "v3"].forEach(function (v) { box.classList.toggle("snmp-" + v, ver.value === v); });
+      ["noAuthNoPriv", "authNoPriv", "authPriv"].forEach(function (l) {
+        box.classList.toggle("snmp-level-" + l, level.value === l);
+      });
+    };
+    ver.addEventListener("change", sync);
+    level.addEventListener("change", sync);
+    sync();
+  });
 
   var workspace = document.getElementById("workspace");
   if (!workspace) {
@@ -95,6 +114,27 @@
     save();
   }
 
+  // /?open=<id>&port=<ifIndex> (from the dashboard): the device to open and,
+  // for proxied EDM switches, the port that EDM should show.
+  var openID = "", openPort = "";
+  try {
+    var params = new URLSearchParams(window.location.search);
+    if (/^[0-9]+$/.test(params.get("open") || "")) openID = params.get("open");
+    if (/^[0-9]+$/.test(params.get("port") || "")) openPort = params.get("port");
+  } catch (err) { /* old browser */ }
+
+  // deviceHref is where a device link leads; the first proxied open of the
+  // device from /?open= carries the port.
+  function deviceHref(link) {
+    var href = link.getAttribute("href");
+    var kind = link.dataset.kind;
+    if (openPort && link.dataset.id === openID && (kind === "ers-edm" || kind === "vsp-edm")) {
+      href += "?port=" + openPort;
+      openPort = "";
+    }
+    return href;
+  }
+
   function openPopup(href, id) {
     window.open(href, "ersp-" + id, "popup,width=1280,height=860");
   }
@@ -112,10 +152,10 @@
     var frame = document.createElement("iframe");
     frame.className = "pane";
     frame.title = link.dataset.name;
-    if (link.dataset.kind === "link") {
+    if (link.dataset.kind !== "ers-edm" && link.dataset.kind !== "vsp-edm") {
       frame.referrerPolicy = "no-referrer";
     }
-    frame.src = link.getAttribute("href");
+    frame.src = deviceHref(link);
     var t = { id: id, kind: link.dataset.kind, name: link.dataset.name, href: link.getAttribute("href"), tab: node, frame: frame };
     node.addEventListener("click", function (e) {
       var btn = e.target.closest("button");
@@ -162,7 +202,7 @@
     }
     if (a.dataset.openAs === "window") {
       e.preventDefault();
-      openPopup(a.getAttribute("href"), a.dataset.id);
+      openPopup(deviceHref(a), a.dataset.id);
       return;
     }
     if (!a.classList.contains("device-open")) {
@@ -174,10 +214,10 @@
       openTab(a);
     } else if (mode === "tab") {
       e.preventDefault();
-      window.open(a.getAttribute("href"), "_blank", "noopener,noreferrer");
+      window.open(deviceHref(a), "_blank", "noopener,noreferrer");
     } else if (mode === "window") {
       e.preventDefault();
-      openPopup(a.getAttribute("href"), a.dataset.id);
+      openPopup(deviceHref(a), a.dataset.id);
     }
   });
 
@@ -198,14 +238,13 @@
   activate(active);
 
   // /?open=<id> (from the dashboard): open that device like a click would.
-  try {
-    var openID = new URLSearchParams(window.location.search).get("open");
-    if (openID && /^[0-9]+$/.test(openID)) {
-      var toOpen = deviceLink(openID);
-      if (toOpen) toOpen.click();
-      window.history.replaceState(null, "", "/");
-    }
-  } catch (err) { /* old browser */ }
+  // A restored tab of the device was created with the port already.
+  if (openID) {
+    var toOpen = deviceLink(openID);
+    if (toOpen) toOpen.click();
+    openPort = "";
+    try { window.history.replaceState(null, "", "/"); } catch (err) { /* old browser */ }
+  }
 
   // --- Status dots ---
   var sidebar = document.getElementById("sidebar");

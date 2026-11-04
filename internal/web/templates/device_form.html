@@ -8,6 +8,8 @@
     <label>{{.T "col.kind"}}
       <select name="kind" id="device-kind">
         <option value="ers-edm"{{if eq $d.Kind "ers-edm"}} selected{{end}}>{{.T "kind.ers-edm"}}</option>
+        <option value="vsp-edm"{{if eq $d.Kind "vsp-edm"}} selected{{end}}>{{.T "kind.vsp-edm"}}</option>
+        <option value="edm-direct"{{if eq $d.Kind "edm-direct"}} selected{{end}}>{{.T "kind.edm-direct"}}</option>
         <option value="link"{{if eq $d.Kind "link"}} selected{{end}}>{{.T "kind.link"}}</option>
       </select>
     </label>
@@ -32,14 +34,15 @@
           {{range $m := tlsModes}}<option value="{{$m}}"{{if eq $m $d.TLSMode}} selected{{end}}>{{$.T (print "tls." $m)}}</option>{{end}}
         </select>
       </label>
-      <label>{{.T "col.isolation"}}
+      <label class="proxy-only">{{.T "col.isolation"}}
         <select name="isolation">
           <option value="sandbox"{{if eq $d.Isolation "sandbox"}} selected{{end}}>{{.T "isolation.sandbox"}}</option>
           <option value="off"{{if eq $d.Isolation "off"}} selected{{end}}>{{.T "isolation.off"}}</option>
         </select>
       </label>
-      {{if $d.HasCredentials}}<label class="check"><input type="checkbox" name="auto_login" value="1"{{if $d.AutoLogin}} checked{{end}}> {{.T "devices.auto_login"}}</label>{{end}}
-      <p class="muted small span-all">{{.T "devices.isolation_hint"}}</p>
+      {{if $d.HasCredentials}}<label class="check proxy-only"><input type="checkbox" name="auto_login" value="1"{{if $d.AutoLogin}} checked{{end}}> {{.T "devices.auto_login"}}</label>{{end}}
+      <p class="muted small span-all proxy-only">{{.T "devices.isolation_hint"}}</p>
+      <p class="muted small span-all direct-only">{{.T "devices.direct_hint"}}</p>
     </fieldset>
     <fieldset>
       <legend>{{.T "devices.monitoring"}}</legend>
@@ -54,13 +57,16 @@
         </select>
       </label>
       <label>{{.T "col.monitor_interval"}}<input name="monitor_interval" type="number" min="30" max="3600" value="{{$d.MonitorInterval}}" class="narrow"{{if eq .Data.ErrKey "monitor_interval"}} aria-invalid="true"{{end}}></label>
-      <label>{{.T "col.snmp_version"}}
-        <select name="snmp_version" id="snmp-version">
-          {{range $v := snmpVersions}}<option value="{{$v}}"{{if eq $v $d.SNMPVersion}} selected{{end}}>{{$v}}</option>{{end}}
-        </select>
-      </label>
       <label>{{.T "col.snmp_port"}}<input name="snmp_port" type="number" min="1" max="65535" value="{{$d.SNMPPort}}" class="narrow"{{if eq .Data.ErrKey "snmp_port"}} aria-invalid="true"{{end}}></label>
       <p class="muted small span-all">{{.T "devices.monitoring_hint"}}</p>
+      {{if .Data.New}}
+      <div class="form-grid span-all snmp-box snmp-{{$d.SNMPVersion}} snmp-level-authPriv">
+        <h3 class="span-all">{{.T "devices.snmp"}}</h3>
+        {{template "snmp_fields" .}}
+        <label>{{.T "devices.confirm_password"}}<input name="confirm_password" type="password" autocomplete="current-password"></label>
+        <p class="small muted span-all">{{.T "devices.snmp_new_hint"}}</p>
+      </div>
+      {{end}}
     </fieldset>
     <label class="check"><input type="checkbox" name="health_enabled" value="1"{{if $d.HealthEnabled}} checked{{end}}> {{.T "devices.health"}}</label>
     <label class="span-all">{{.T "col.notes"}}<textarea name="notes" rows="2" maxlength="1000">{{$d.Notes}}</textarea></label>
@@ -73,32 +79,10 @@
 {{if not .Data.New}}
 <section class="card">
   <h3>{{.T "devices.snmp"}}</h3>
-  <p class="small muted">{{if $d.HasSNMPCredentials}}{{.T "devices.snmp_stored"}}{{else}}{{.T "devices.snmp_none"}}{{end}}</p>
-  <form method="post" action="/admin/devices/{{$d.ID}}/snmp" class="form-grid" id="snmp-form" autocomplete="off" data-version="{{$d.SNMPVersion}}">
+  <p class="small muted">{{if $d.HasSNMPCredentials}}{{.T "devices.snmp_stored"}} (SNMP{{$d.SNMPVersion}}){{else}}{{.T "devices.snmp_none"}}{{end}}</p>
+  <form method="post" action="/admin/devices/{{$d.ID}}/snmp" class="form-grid snmp-box snmp-{{$d.SNMPVersion}} snmp-level-authPriv" id="snmp-form" autocomplete="off">
     <input type="hidden" name="_csrf" value="{{.CSRF}}">
-    {{if eq $d.SNMPVersion "v3"}}
-    <label>{{.T "snmp.username"}}<input name="username" maxlength="64" autocomplete="off"></label>
-    <label>{{.T "snmp.security_level"}}
-      <select name="security_level">
-        {{range $l := securityLevels}}<option value="{{$l}}"{{if eq $l "authPriv"}} selected{{end}}>{{$l}}</option>{{end}}
-      </select>
-    </label>
-    <label>{{.T "snmp.auth_protocol"}}
-      <select name="auth_protocol">
-        {{range $p := authProtocols}}<option value="{{$p}}"{{if eq $p "SHA-256"}} selected{{end}}>{{$p}}</option>{{end}}
-      </select>
-    </label>
-    <label>{{.T "snmp.auth_password"}}<input name="auth_password" type="password" maxlength="128" autocomplete="new-password"></label>
-    <label>{{.T "snmp.priv_protocol"}}
-      <select name="priv_protocol">
-        {{range $p := privProtocols}}<option value="{{$p}}"{{if eq $p "AES-128"}} selected{{end}}>{{$p}}</option>{{end}}
-      </select>
-    </label>
-    <label>{{.T "snmp.priv_password"}}<input name="priv_password" type="password" maxlength="128" autocomplete="new-password"></label>
-    <label>{{.T "snmp.context_name"}}<input name="context_name" maxlength="64" autocomplete="off"></label>
-    {{else}}
-    <label>{{.T "snmp.community"}}<input name="community" type="password" maxlength="128" autocomplete="new-password"></label>
-    {{end}}
+    {{template "snmp_fields" .}}
     <label>{{.T "devices.confirm_password"}}<input name="confirm_password" type="password" required autocomplete="current-password"></label>
     <div class="actions">
       <button type="submit">{{.T "action.save"}}</button>
@@ -109,7 +93,7 @@
   <p class="small muted">{{.T "devices.snmp_readonly"}}</p>
 </section>
 {{end}}
-{{if and (not .Data.New) $d.Proxied}}
+{{if and (not .Data.New) $d.EDM}}
 <div class="grid-2">
 <section class="card">
   <h3>{{.T "devices.tls"}}</h3>
@@ -121,17 +105,23 @@
       <input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="clear" value="1">
       <button type="submit" class="danger">{{.T "devices.pin_clear"}}</button>
     </form>
-  {{else}}
+  {{else if $d.Proxied}}
     <p class="small muted">{{.T "devices.pin_none"}}</p>
+  {{else if hasPrefix $d.URL "https://"}}
+    <p class="small muted">{{.T "devices.pin_none_direct"}}</p>
+    <p><a class="button" href="/admin/devices/{{$d.ID}}/trust">{{.T "devices.pin_check"}}</a></p>
+  {{else}}
+    <p class="small muted">{{.T "devices.pin_http"}}</p>
   {{end}}
 </section>
 <section class="card">
-  <h3>{{.T "devices.login"}}</h3>
+  <h3>{{if $d.Proxied}}{{.T "devices.login"}}{{else}}{{.T "devices.login_direct"}}{{end}}</h3>
   <p class="small muted">{{if $d.HasCredentials}}{{.T "devices.login_stored"}}{{else}}{{.T "devices.login_none"}}{{end}}</p>
   <form method="post" action="/admin/devices/{{$d.ID}}/credentials" class="form-grid" autocomplete="off">
     <input type="hidden" name="_csrf" value="{{.CSRF}}">
-    <label>{{.T "login.username"}}<input name="username" maxlength="15" autocomplete="off"></label>
-    <label>{{.T "login.password"}}<input name="password" type="password" maxlength="15" autocomplete="new-password"></label>
+    {{$max := 64}}{{if eq $d.Kind "ers-edm"}}{{$max = 15}}{{end}}
+    <label>{{.T "login.username"}}<input name="username" maxlength="{{$max}}" autocomplete="off"></label>
+    <label>{{.T "login.password"}}<input name="password" type="password" maxlength="{{$max}}" autocomplete="new-password"></label>
     <label>{{.T "devices.confirm_password"}}<input name="confirm_password" type="password" required autocomplete="current-password"></label>
     <div class="actions">
       <button type="submit">{{.T "action.save"}}</button>
@@ -139,7 +129,36 @@
     </div>
   </form>
   <p class="small muted">{{.T "devices.login_hint"}}</p>
+  {{if not $d.Proxied}}<p class="small muted">{{.T "devices.login_hint_direct"}}</p>{{end}}
 </section>
 </div>
 {{end}}
+{{end}}
+
+{{define "snmp_fields"}}
+    <label>{{.T "col.snmp_version"}}
+      <select name="snmp_version">
+        {{range $v := snmpVersions}}<option value="{{$v}}"{{if eq $v $.Data.Device.SNMPVersion}} selected{{end}}>{{$v}}</option>{{end}}
+      </select>
+    </label>
+    <label class="snmp-v2c-only">{{.T "snmp.community"}}<input name="community" type="password" maxlength="128" autocomplete="new-password"></label>
+    <label class="snmp-v3-only">{{.T "snmp.username"}}<input name="username" maxlength="64" autocomplete="off"></label>
+    <label class="snmp-v3-only">{{.T "snmp.security_level"}}
+      <select name="security_level">
+        {{range $l := securityLevels}}<option value="{{$l}}"{{if eq $l "authPriv"}} selected{{end}}>{{$l}}</option>{{end}}
+      </select>
+    </label>
+    <label class="snmp-v3-only snmp-auth">{{.T "snmp.auth_protocol"}}
+      <select name="auth_protocol">
+        {{range $p := authProtocols}}<option value="{{$p}}"{{if eq $p "SHA-256"}} selected{{end}}>{{$p}}</option>{{end}}
+      </select>
+    </label>
+    <label class="snmp-v3-only snmp-auth">{{.T "snmp.auth_password"}}<input name="auth_password" type="password" maxlength="128" autocomplete="new-password"></label>
+    <label class="snmp-v3-only snmp-priv">{{.T "snmp.priv_protocol"}}
+      <select name="priv_protocol">
+        {{range $p := privProtocols}}<option value="{{$p}}"{{if eq $p "AES-128"}} selected{{end}}>{{$p}}</option>{{end}}
+      </select>
+    </label>
+    <label class="snmp-v3-only snmp-priv">{{.T "snmp.priv_password"}}<input name="priv_password" type="password" maxlength="128" autocomplete="new-password"></label>
+    <label class="snmp-v3-only">{{.T "snmp.context_name"}}<input name="context_name" maxlength="64" autocomplete="off"></label>
 {{end}}

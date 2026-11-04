@@ -3,6 +3,7 @@ package drivers
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -264,5 +265,189 @@ func TestTPPortList(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, []string{"1/0/1", "1/0/2", "1/0/3", "1/0/6", "LAG1"}) {
 		t.Fatalf("got %v", got)
+	}
+}
+
+func TestVOSSAgainstSimulator(t *testing.T) {
+	s, d := collect(t, "voss")
+	if d.Name() != "voss" || s.Driver != "voss" {
+		t.Fatalf("detected %s", d.Name())
+	}
+	trunk := port(t, s, 192)
+	if !trunk.Physical || trunk.Unit != 1 || trunk.Number != 1 || !trunk.Up() || trunk.Speed != 1_000_000_000 ||
+		trunk.Duplex != "full" || trunk.Alias != "uplink to core" {
+		t.Errorf("port 1/1: %+v", trunk)
+	}
+	if trunk.Mode != "trunk" || trunk.PVID != 10 || len(trunk.Untagged) != 0 || !reflect.DeepEqual(trunk.Tagged, []int{1, 10, 20}) {
+		t.Errorf("trunk 1/1: mode %s pvid %d untagged %v tagged %v", trunk.Mode, trunk.PVID, trunk.Untagged, trunk.Tagged)
+	}
+	if n := trunk.Neighbor; n == nil || n.SysName != "core-sw" || n.PortID != "1/12" || !n.Bridge {
+		t.Errorf("neighbour on 1/1: %+v", trunk.Neighbor)
+	}
+	if p := port(t, s, 195); p.Up() || p.Duplex != "" || p.Speed != 0 || p.Number != 4 { // VOSS reports half duplex without link
+		t.Errorf("port 1/4 should be down without duplex: %+v", p)
+	}
+	if p := port(t, s, 196); p.Up() || p.Admin != "down" || p.Duplex != "" {
+		t.Errorf("port 1/5 should be admin down: %+v", p)
+	}
+	for ifIndex, num := range map[int]int{240: 49, 241: 50} {
+		p := port(t, s, ifIndex)
+		if p.Unit != 1 || p.Number != num || p.LAG != 1 || p.LAGName != "MLT-Uplink" || p.Speed != 10_000_000_000 {
+			t.Errorf("port 1/%d: %+v", num, p)
+		}
+	}
+	if p := port(t, s, 192); p.LAG != 0 {
+		t.Errorf("port 1/1 must not be in an MLT: %d", p.LAG)
+	}
+	for _, ifIndex := range []int{2049, 2058, 2068} {
+		if p := port(t, s, ifIndex); p.Physical || p.Unit != 0 || p.Number != 0 {
+			t.Errorf("VLAN interface %d: %+v", ifIndex, p)
+		}
+	}
+	if p := port(t, s, 193); p.Mode != "access" || p.PVID != 10 || !reflect.DeepEqual(p.Untagged, []int{10}) || len(p.Tagged) != 0 {
+		t.Errorf("port 1/2: %+v", p)
+	}
+	if p := port(t, s, 194); p.Mode != "access" || !reflect.DeepEqual(p.Untagged, []int{20}) {
+		t.Errorf("port 1/3: %+v", p)
+	}
+	if p := port(t, s, 197); p.Mode != "hybrid" || p.PVID != 10 || !reflect.DeepEqual(p.Untagged, []int{10}) || !reflect.DeepEqual(p.Tagged, []int{20}) {
+		t.Errorf("port 1/6: %+v", p)
+	}
+	if len(s.VLANs) != 3 || s.VLANs[0].Name != "Default" || s.VLANs[1].ID != 10 || s.VLANs[1].Name != "Office" || s.VLANs[2].Name != "Voice" {
+		t.Errorf("VLANs %+v", s.VLANs)
+	}
+	want := []monitor.Unit{{Number: 1, Model: "VSP-4850GTS", Firmware: "7.1.10.0", Serial: "SYNTH0001"}}
+	if !reflect.DeepEqual(s.Units, want) {
+		t.Errorf("units %+v", s.Units)
+	}
+	found := false
+	for _, n := range s.Notes {
+		found = found || strings.Contains(n, "MLT membership") && strings.Contains(n, "not verified")
+	}
+	if !found {
+		t.Errorf("MLT note missing: %v", s.Notes)
+	}
+	if s.Ports[0].Number == 0 || s.Ports[len(s.Ports)-1].Number != 0 {
+		t.Error("front-panel ports must come first")
+	}
+}
+
+func TestVOSSLocate(t *testing.T) {
+	cases := []struct {
+		name, descr    string
+		ifIndex        int
+		slot, port, ch int
+		ok             bool
+	}{
+		{"1/1", "", 192, 1, 1, 0, true},
+		{"2/17", "", 0, 2, 17, 0, true},
+		{"1/49/3", "", 0, 1, 49, 3, true},
+		{"mgmt", "", 64, 0, 0, 0, false},
+		{"", "Extreme Networks Virtual Services Platform 4850GTS - 1000BaseTX Port 1/5", 0, 1, 5, 0, true},
+		{"", "", 256, 2, 1, 0, true},
+	}
+	for _, c := range cases {
+		slot, port, ch, ok := vossLocate(&monitor.Port{Name: c.name, Descr: c.descr, IfIndex: c.ifIndex})
+		if slot != c.slot || port != c.port || ch != c.ch || ok != c.ok {
+			t.Errorf("%+v: got %d/%d/%d %v", c, slot, port, ch, ok)
+		}
+	}
+}
+
+func TestVOSSMatch(t *testing.T) {
+	v := VOSS{}
+	if got := v.Match(monitor.System{ObjectID: "1.3.6.1.4.1.2272.202"}); got != 100 {
+		t.Errorf("by OID: %d", got)
+	}
+	if got := v.Match(monitor.System{ObjectID: "1.3.6.1.4.1.1.1", Descr: "VSP-7254XSQ (8.1.0.0)"}); got != 90 {
+		t.Errorf("by sysDescr: %d", got)
+	}
+	if got := v.Match(monitor.System{ObjectID: "1.3.6.1.4.1.9.1.1208", Descr: "Cisco IOS Software"}); got != 0 {
+		t.Errorf("Cisco: %d", got)
+	}
+	ers := monitor.System{ObjectID: "1.3.6.1.4.1.45.3.80.1", Descr: "Ethernet Routing Switch 5698TFD-PWR"}
+	d, err := monitor.NewRegistry(All()...).Detect(ers)
+	if err != nil || d.Name() != "ers" {
+		t.Errorf("ERS 5600 detected as %v (%v)", d, err)
+	}
+}
+
+// fakeReader is an in-memory monitor.Reader: cols maps a column name to its
+// values by row index.
+type fakeReader struct {
+	scalars map[string]monitor.Value
+	cols    map[string]map[string]monitor.Value
+}
+
+func (f fakeReader) Scalars(_ context.Context, names ...string) (map[string]monitor.Value, error) {
+	out := map[string]monitor.Value{}
+	for _, n := range names {
+		if v, ok := f.scalars[n]; ok {
+			out[n] = v
+		}
+	}
+	return out, nil
+}
+
+func (f fakeReader) Columns(_ context.Context, names ...string) (monitor.Table, error) {
+	out := monitor.Table{}
+	for _, n := range names {
+		for idx, v := range f.cols[n] {
+			if out[idx] == nil {
+				out[idx] = monitor.Row{}
+			}
+			out[idx][n] = v
+		}
+	}
+	return out, nil
+}
+
+func vtxt(s string) monitor.Value { return monitor.Value{Kind: monitor.KindBytes, Bytes: []byte(s)} }
+func vint(n int64) monitor.Value  { return monitor.Value{Kind: monitor.KindInt, Int: n} }
+func vuint(n uint64) monitor.Value {
+	return monitor.Value{Kind: monitor.KindUint, Uint: n}
+}
+
+// TestVOSSOverEDMWithoutIfTypeAndName covers what VOSS's EDM delivers: no
+// ifType and no ifName.
+func TestVOSSOverEDMWithoutIfTypeAndName(t *testing.T) {
+	const d1 = "Extreme Networks Virtual Services Platform 4850GTS - 1000BaseTX Port 1/1"
+	const d49 = "Extreme Networks Virtual Services Platform 4850GTS - 10GbNone Port 1/49"
+	r := fakeReader{
+		scalars: map[string]monitor.Value{
+			"sysDescr":    vtxt("VSP-4850GTS (7.1.10.0)  HW Base: VSP 4850"),
+			"sysObjectID": {Kind: monitor.KindOID, OID: "1.3.6.1.4.1.2272.300"},
+			"sysName":     vtxt("vsp1"),
+		},
+		cols: map[string]map[string]monitor.Value{
+			"ifDescr":         {"192": vtxt(d1), "240": vtxt(d49), "2049": vtxt("VLAN - Default")},
+			"ifSpeed":         {"192": vuint(1_000_000_000), "240": vuint(4294967295), "2049": vuint(0)},
+			"ifAdminStatus":   {"192": vint(1), "240": vint(1), "2049": vint(1)},
+			"ifOperStatus":    {"192": vint(1), "240": vint(1), "2049": vint(1)},
+			"ifHCInOctets":    {"192": vuint(5), "240": vuint(6), "2049": vuint(0)},
+			"rcPortOperSpeed": {"240": vuint(10000)},
+			"rcVlanName":      {"1": vtxt("Default")},
+		},
+	}
+	snap, err := VOSS{}.Collect(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := port(t, snap, 192)
+	if !p.Physical || p.Unit != 1 || p.Number != 1 || p.Name != "1/1" {
+		t.Errorf("port 1/1: %+v", p)
+	}
+	q := port(t, snap, 240)
+	if !q.Physical || q.Unit != 1 || q.Number != 49 || q.Name != "1/49" {
+		t.Errorf("port 1/49: %+v", q)
+	}
+	if q.Speed != 10_000_000_000 {
+		t.Errorf("port 1/49 speed %d, want 10 Gbit/s from rcPortOperSpeed", q.Speed)
+	}
+	if v := port(t, snap, 2049); v.Physical || v.Unit != 0 || v.Number != 0 {
+		t.Errorf("VLAN interface must not be physical: %+v", v)
+	}
+	if len(snap.Units) != 1 || snap.Units[0].Number != 1 || snap.Units[0].Model != "VSP-4850GTS" {
+		t.Errorf("units %+v", snap.Units)
 	}
 }

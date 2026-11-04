@@ -64,11 +64,25 @@ option. Instead:
 5. **Framing.** Proxied documents may be framed only by the portal (`frame-ancestors 'self'`)
    and send no referrer.
 
+The sandbox also blocks Web Storage. The shim replaces `localStorage` and `sessionStorage` with
+a store that the proxy keeps per proxy session (in memory, at most 64 KiB, dropped with the
+session). Only the document of that proxy session can read it (the token is the key), and it is
+never sent to the switch. The proxy itself adds only the port to select (`x:port`, an
+ifIndex checked as a number).
+
 If a switch's EDM needs a browser feature that the sandbox forbids, an admin can set
 `isolation: off` for that device. The portal then shows a permanent warning for the device.
 
+Devices of kind `vsp-edm` (VSP switches with VOSS) are proxied exactly like ERS switches.
+Devices of kind `link` and `edm-direct` (VSP switches opened directly) are not proxied: the browser loads them from their own origin, never under the portal's, so this
+section does not apply to them. For `edm-direct` devices ERS-Proxy only reads from the EDM
+itself (EDM data source) with the pinned certificate and the stored login (T5, T6).
+
 ### Stored switch passwords (T5)
 
+- Storing a switch login or SNMP credentials (and creating users) needs the admin's own
+  password again (re-authentication). An unattended browser or a stolen session cookie alone
+  cannot add or swap stored secrets; failed confirmations count towards the login lockout.
 - Encrypted with AES-256-GCM. The key lives in a separate file (`secret_key_file`), so a copy of
   the database alone reveals nothing.
 - The ciphertext is bound to the device ID, host and port as associated data. Changing the

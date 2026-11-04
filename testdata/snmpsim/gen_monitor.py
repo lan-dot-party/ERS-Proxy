@@ -5,7 +5,7 @@
 
 writes generic.snmprec (a Q-BRIDGE switch), ers5600.snmprec (an ERS 5600
 two-unit stack with RAPID-CITY VLANs and no Q-BRIDGE), cisco.snmprec (VTP) and
-tplink.snmprec (Q-BRIDGE). All values are made up;
+tplink.snmprec (Q-BRIDGE) and voss.snmprec (VSP 4850GTS on VOSS 7.1). All values are made up;
 only the OIDs are real. The community of each agent is its file name.
 """
 import os
@@ -276,6 +276,48 @@ def tplink_qbridge():
     a.write("tplink-qbridge.snmprec")
 
 
+def voss():
+    """VSP 4850GTS on VOSS 7.1 as seen on real hardware: ifIndex 192 = 1/1, no
+    EtherLike/LAG/PoE MIBs, duplex and speed from RAPID-CITY rcPortTable."""
+    a = Agent()
+    system(a, "VSP-4850GTS (7.1.10.0)  HW Base: VSP 4850", "1.3.6.1.4.1.2272.202", "vsp-lab")
+    a.s("1.3.6.1.4.1.2272.1.1.7.0", "7.1.10.0 build on Mon Jan 01 00:00:00 UTC 2024")
+    a.s("1.3.6.1.4.1.2272.1.4.2.0", "SYNTH0001")
+    # (ifIndex, port name, link up, admin up, Mbit/s)
+    ports = [(192, "1/1", True, True, 1000), (193, "1/2", True, True, 1000), (194, "1/3", True, True, 1000),
+             (195, "1/4", False, True, 0), (196, "1/5", False, False, 0), (197, "1/6", True, True, 1000),
+             (240, "1/49", True, True, 10000), (241, "1/50", True, True, 10000)]
+    tagging = {192: 1, 193: 2, 194: 2, 195: 2, 196: 2, 197: 4, 240: 2, 241: 2}
+    pvid = {192: 10, 193: 10, 194: 20, 195: 10, 196: 1, 197: 10, 240: 1, 241: 1}
+    for idx, name, up, admin, mbps in ports:
+        kind = "10GBaseSFP" if mbps == 10000 else "1000BaseTX"
+        interface(a, idx, name, f"Extreme Networks Virtual Services Platform 4850GTS - {kind} Port {name}",
+                  6, up, mbps, alias="uplink to core" if idx == 192 else "", admin_up=admin,
+                  in_octets=idx * 100000, out_octets=idx * 200000)
+        a.i(f"1.3.6.1.2.1.17.1.4.1.2.{idx}", idx)  # bridge port number = ifIndex
+        a.i(f"1.3.6.1.4.1.2272.1.4.10.1.1.13.{idx}", 2 if up else 1)  # down ports report half
+        a.i(f"1.3.6.1.4.1.2272.1.4.10.1.1.15.{idx}", mbps if up else 0)
+        a.i(f"1.3.6.1.4.1.2272.1.3.3.1.7.{idx}", pvid[idx])
+        a.i(f"1.3.6.1.4.1.2272.1.3.3.1.8.{idx}", tagging[idx])
+        a.i(f"1.0.8802.1.1.2.1.3.7.1.2.{idx}", 5)
+        a.s(f"1.0.8802.1.1.2.1.3.7.1.3.{idx}", name)
+    vlans = {1: "Default", 10: "Office", 20: "Voice"}
+    for vid, name in vlans.items():
+        interface(a, 2048 + vid, name, f"VLAN - {name}", 135, True, 1000)
+    members = {1: [192, 240, 241, 196], 10: [192, 193, 195, 197], 20: [192, 194, 197]}
+    for vid, name in vlans.items():
+        a.s(f"1.3.6.1.4.1.2272.1.3.2.1.2.{vid}", name)
+        a.x(f"1.3.6.1.4.1.2272.1.3.2.1.11.{vid}", bitmap(members[vid], 31))
+    a.s("1.3.6.1.4.1.2272.1.17.10.1.2.1", "MLT-Uplink")
+    a.x("1.3.6.1.4.1.2272.1.17.10.1.3.1", bitmap([240, 241], 31))
+    # LLDP neighbour on trunk port 1/1 (ifIndex 192)
+    a.s("1.0.8802.1.1.2.1.4.1.1.7.0.192.1", "1/12")
+    a.s("1.0.8802.1.1.2.1.4.1.1.8.0.192.1", "Downlink to lab")
+    a.s("1.0.8802.1.1.2.1.4.1.1.9.0.192.1", "core-sw")
+    a.x("1.0.8802.1.1.2.1.4.1.1.12.0.192.1", [0x28, 0x00])
+    a.write("voss.snmprec")
+
+
 def demo(source, target):
     """A copy of an agent with growing counters (snmpsim "numeric" variation),
     for demonstrations: traffic between about 1 and 80 Mbit/s per port."""
@@ -301,5 +343,6 @@ if __name__ == "__main__":
     cisco()
     tplink()
     tplink_qbridge()
+    voss()
     demo("ers5600.snmprec", "demo-ers5600.snmprec")
     demo("generic.snmprec", "demo-generic.snmprec")

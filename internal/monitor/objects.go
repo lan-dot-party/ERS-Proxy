@@ -109,12 +109,15 @@ var Objects = map[string]string{
 	"s5ChasComVer":                "1.3.6.1.4.1.45.1.6.3.3.1.1.6",
 	"s5ChasComSerNum":             "1.3.6.1.4.1.45.1.6.3.3.1.1.7",
 	"s5ChasComRunningSoftwareVer": "1.3.6.1.4.1.45.1.6.3.3.1.1.19",
+	// RAPID-CITY scalars of VSP/VOSS switches
+	"rcSysVersion":       "1.3.6.1.4.1.2272.1.1.7",
+	"rcChasSerialNumber": "1.3.6.1.4.1.2272.1.4.2",
 }
 
 // Scalar reports whether a name is a scalar object (read with ".0").
 func Scalar(name string) bool {
 	switch name {
-	case "sysDescr", "sysObjectID", "sysUpTime", "sysName", "sysLocation":
+	case "sysDescr", "sysObjectID", "sysUpTime", "sysName", "sysLocation", "rcSysVersion", "rcChasSerialNumber":
 		return true
 	}
 	return false

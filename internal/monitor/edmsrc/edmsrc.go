@@ -99,6 +99,31 @@ type Session struct {
 	// a poll every minute would keep it locked for people, too. Storing new
 	// credentials creates a new session.
 	refused error
+
+	// unknown holds object names the switch answered with Oid_Conversion_Fail
+	// (VOSS knows neither ifName nor ifHighSpeed); they are left out of later
+	// requests.
+	umu     sync.Mutex
+	unknown map[string]bool
+}
+
+// convFail is the switch's answer for an object name it cannot resolve. One
+// such name in a table request truncates the whole answer to one row.
+const convFail = "Oid_Conversion_Fail"
+
+func (s *Session) isUnknown(name string) bool {
+	s.umu.Lock()
+	defer s.umu.Unlock()
+	return s.unknown[name]
+}
+
+func (s *Session) markUnknown(name string) {
+	s.umu.Lock()
+	defer s.umu.Unlock()
+	if s.unknown == nil {
+		s.unknown = map[string]bool{}
+	}
+	s.unknown[name] = true
 }
 
 // NewSession prepares a session; it logs in on the first request.
@@ -168,6 +193,29 @@ func (s *Session) post(ctx context.Context, path string, form url.Values) (strin
 	return "", ErrSession
 }
 
+// Logout ends the switch's session (GET /logout.html, like EDM's "Log out"
+// link). VSP switches allow only a few web sessions at a time, so a session
+// that is replaced should not wait for the switch's idle timeout.
+func (s *Session) Logout(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.logged {
+		return
+	}
+	s.logged = false
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.base+"/logout.html", nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Cookie", s.jar.Header())
+	resp, err := (&http.Client{Transport: s.rt, Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	resp.Body.Close()
+}
+
 // Reader implements monitor.Reader on a session.
 type Reader struct{ S *Session }
 
@@ -185,6 +233,9 @@ func (r Reader) Scalars(ctx context.Context, names ...string) (map[string]monito
 			continue
 		}
 		name = strings.SplitN(name, ".", 2)[0]
+		if val == convFail {
+			continue
+		}
 		if v, ok := convert(name, val); ok {
 			out[name] = v
 		}
@@ -200,7 +251,7 @@ func (r Reader) Columns(ctx context.Context, names ...string) (monitor.Table, er
 		var want []string
 		for _, n := range names {
 			for _, c := range t.Columns {
-				if n == c {
+				if n == c && !r.S.isUnknown(n) {
 					want = append(want, n)
 				}
 			}
@@ -209,21 +260,45 @@ func (r Reader) Columns(ctx context.Context, names ...string) (monitor.Table, er
 			continue
 		}
 		idxCols := len(t.Index)
-		cols := append(append([]string{}, t.Index...), want...)
 		if t.NAIndex {
 			idxCols = 1
-			cols = append([]string{"indexNA"}, want...)
 		}
-		text, err := r.S.post(ctx, "/jsp/getTableMibs.jsp", url.Values{"command": {"getTableVariables"}, "varNames": {strings.Join(cols, ",")}})
-		if err != nil {
-			return nil, err
-		}
-		rows, err := ParseArray(text)
-		if err != nil {
-			return nil, fmt.Errorf("table %s: %w", t.Columns[0], err)
+		var rows [][]string
+		for len(want) > 0 {
+			cols := append(append([]string{}, t.Index...), want...)
+			if t.NAIndex {
+				cols = append([]string{"indexNA"}, want...)
+			}
+			text, err := r.S.post(ctx, "/jsp/getTableMibs.jsp", url.Values{"command": {"getTableVariables"}, "varNames": {strings.Join(cols, ",")}})
+			if err != nil {
+				return nil, err
+			}
+			if rows, err = ParseArray(text); err != nil {
+				return nil, fmt.Errorf("table %s: %w", t.Columns[0], err)
+			}
+			// Leave out the names the switch cannot resolve and ask again.
+			var keep []string
+			for i, n := range want {
+				failed := false
+				for _, row := range rows {
+					if idxCols+i < len(row) && row[idxCols+i] == convFail {
+						failed = true
+						break
+					}
+				}
+				if failed {
+					r.S.markUnknown(n)
+				} else {
+					keep = append(keep, n)
+				}
+			}
+			if len(keep) == len(want) {
+				break
+			}
+			want, rows = keep, nil
 		}
 		for _, row := range rows {
-			if len(row) < len(cols) {
+			if len(row) < idxCols+len(want) {
 				continue
 			}
 			idx := row[:idxCols]
@@ -245,7 +320,7 @@ func (r Reader) Columns(ctx context.Context, names ...string) (monitor.Table, er
 			}
 			key := strings.Join(idx, ".")
 			for i, n := range want {
-				if v, ok := convert(n, row[idxCols+i]); ok {
+				if v, ok := convert(n, row[idxCols+i]); ok && row[idxCols+i] != convFail {
 					if out[key] == nil {
 						out[key] = monitor.Row{}
 					}

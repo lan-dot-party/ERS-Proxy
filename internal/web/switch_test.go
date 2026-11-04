@@ -93,6 +93,9 @@ func TestSwitchAndPortPages(t *testing.T) {
 	if strings.Contains(body, "line-in-max") {
 		t.Error("max lines at 60 s resolution")
 	}
+	if !strings.Contains(body, `href="/?open=`+itoa(id)+`&amp;port=1"`) {
+		t.Error("port page: \"Open in EDM\" does not pass the port")
+	}
 }
 
 func TestPortPageEmptyHistoryAndMaxLines(t *testing.T) {

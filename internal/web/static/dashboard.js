@@ -169,7 +169,7 @@
     actions.appendChild(det);
     if (dev.proxied) {
       var a = el("a", "button", t("dash.open_edm"));
-      a.href = "/?open=" + encodeURIComponent(dev.id);
+      a.href = "/?open=" + encodeURIComponent(dev.id) + "&port=" + encodeURIComponent(p.ifindex);
       actions.appendChild(a);
     }
     panel.hidden = false;

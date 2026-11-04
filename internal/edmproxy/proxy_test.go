@@ -435,3 +435,126 @@ func TestMarkEDMRead(t *testing.T) {
 		}
 	}
 }
+
+func TestPageStorage(t *testing.T) {
+	e := setup(t, mockswitch.Options{})
+	base := e.open()
+	xhr := map[string]string{"Origin": "null", "Sec-Fetch-Dest": "empty", "Content-Type": "text/plain"}
+	post := func(body string) int {
+		t.Helper()
+		resp, _ := e.do("POST", base+"__ersproxy/storage", body, xhr)
+		return resp.StatusCode
+	}
+	shim := func() string {
+		t.Helper()
+		_, s := e.do("GET", base+"__ersproxy/shim.js", "", map[string]string{"Sec-Fetch-Dest": "script"})
+		return s
+	}
+	if s := shim(); !strings.Contains(s, "var data = {};") || !strings.Contains(s, `"localStorage"`) {
+		t.Fatalf("shim without empty storage:\n%s", s)
+	}
+	if st := post("5\n" + `{"l:storeEDMUser":"rw","s:x":"</script>"}`); st != http.StatusNoContent {
+		t.Fatalf("snapshot: %d", st)
+	}
+	s := shim()
+	if !strings.Contains(s, `"l:storeEDMUser":"rw"`) || strings.Contains(s, "</script>") {
+		t.Fatalf("snapshot not in the shim (or not escaped):\n%s", s)
+	}
+	// An older snapshot (beacons may arrive out of order) is ignored.
+	if st := post("3\n{}"); st != http.StatusNoContent {
+		t.Fatalf("old snapshot: %d", st)
+	}
+	if !strings.Contains(shim(), `"l:storeEDMUser":"rw"`) {
+		t.Fatal("older snapshot replaced a newer one")
+	}
+	for name, body := range map[string]string{
+		"no seq":     `{"a":"b"}`,
+		"not json":   "7\nnot json",
+		"not string": "7\n" + `{"a":1}`,
+		"too large":  "7\n" + `{"a":"` + strings.Repeat("x", maxPageStorage) + `"}`,
+	} {
+		if st := post(body); st != http.StatusBadRequest {
+			t.Errorf("%s: %d, want 400", name, st)
+		}
+	}
+	if !strings.Contains(shim(), `"l:storeEDMUser":"rw"`) {
+		t.Fatal("rejected snapshot changed the storage")
+	}
+	// Web Storage never reaches the switch.
+	e.do("GET", base, "", doc)
+	if strings.Contains(e.mock.LastCookie, "storeEDMUser") {
+		t.Fatalf("storage sent to the switch: %q", e.mock.LastCookie)
+	}
+}
+
+func TestVSPKeepAlive(t *testing.T) {
+	e := setup(t, mockswitch.Options{})
+	ctx := context.Background()
+	base := e.open()
+	e.do("GET", base, "", doc)
+	if !e.mock.LastClose {
+		t.Fatal("ERS device: want Connection: close")
+	}
+	d, err := e.db.DeviceByID(ctx, e.devID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Kind = store.KindVSP
+	if err := e.db.UpdateDevice(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	e.proxy.ForgetDevice(d.ID)
+	base = e.open()
+	e.do("GET", base, "", doc)
+	if e.mock.LastClose {
+		t.Fatal("vsp-edm device: VOSS resets connections asked to close, want keep-alive")
+	}
+}
+
+func TestOpenPortAndReuse(t *testing.T) {
+	e := setup(t, mockswitch.Options{})
+	e.storeLogin()
+	openAt := func(path string) string {
+		t.Helper()
+		resp, _ := e.do("GET", path, "", map[string]string{"Sec-Fetch-Site": "same-origin"})
+		loc := resp.Header.Get("Location")
+		if resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(loc, "/d/") {
+			t.Fatalf("open %s: %d %q", path, resp.StatusCode, loc)
+		}
+		return loc
+	}
+	shim := func(base string) string {
+		t.Helper()
+		_, s := e.do("GET", base+"__ersproxy/shim.js", "", map[string]string{"Sec-Fetch-Dest": "script"})
+		return s
+	}
+	logins := func() int { return e.mock.Requests["/"] } // requests have finished
+
+	base := openAt("/open/1?port=5")
+	if s := shim(base); !strings.Contains(s, `"x:port":"5"`) || !strings.Contains(s, `getElementById("Port_" + n)`) {
+		t.Fatalf("port not handed to the shim:\n%s", s)
+	}
+	n := logins()
+
+	// Opening the device again (workspace reload, dashboard) reuses the
+	// session: no new login at the switch, and the new port is passed on.
+	again := openAt("/open/1?port=7")
+	if again != base || logins() != n {
+		t.Fatalf("reopen: %q (was %q), switch requests %d → %d", again, base, n, logins())
+	}
+	if !strings.Contains(shim(base), `"x:port":"7"`) {
+		t.Fatal("second port not handed to the shim")
+	}
+	for _, bad := range []string{"0", "-1", "x", "1e3", "007", "1000000"} {
+		other := openAt("/open/1?port=" + bad)
+		if strings.Contains(shim(other), `"x:port":"`+bad+`"`) {
+			t.Errorf("invalid port %q accepted", bad)
+		}
+	}
+
+	// After EDM's logout the session is not reused (auto-login again).
+	e.do("GET", base+"logout.html", "", doc)
+	if fresh := openAt("/open/1"); fresh == base {
+		t.Fatal("logged-out session reused")
+	}
+}

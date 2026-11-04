@@ -162,7 +162,7 @@ func (s *Server) monitorJSON(w http.ResponseWriter, r *http.Request) {
 		proxied := map[int64]bool{}
 		if devs, err := s.DB.ListDevices(r.Context()); err == nil {
 			for _, d := range devs {
-				proxied[d.ID] = d.Proxied()
+				proxied[d.ID] = d.EDM()
 			}
 		}
 		for _, st := range s.Monitor.All() {

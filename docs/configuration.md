@@ -54,21 +54,21 @@ Per device (web UI or import file):
 
 | Field | Values | Meaning |
 |---|---|---|
-| kind | `ers-edm`, `link` | Through the EDM proxy, or opened directly. |
-| url | `http(s)://host[:port]` | For `ers-edm` without a path. For `link` the full URL. |
-| open_mode | `inherit`, `embedded`, `tab`, `window` | `inherit` uses the user's default, then `ui.default_open_mode`. |
+| kind | `ers-edm`, `vsp-edm`, `edm-direct`, `link` | `ers-edm`: ERS switch, EDM through the proxy. `vsp-edm`: VSP switch with VOSS, EDM through the proxy (embedded, auto-login, certificate pinned on the server). `edm-direct`: a switch whose EDM works in current browsers (VSP with VOSS); the browser opens it directly, always in its own tab or window (embedded, the switch would be a third party: browsers drop its login cookie and show no certificate warning), and there is no auto-login; ERS-Proxy only talks to its EDM for the EDM data source. `link`: any other device, opened directly. |
+| url | `http(s)://host[:port]` | For `ers-edm`, `vsp-edm` and `edm-direct` without a path. For `link` the full URL. |
+| open_mode | `inherit`, `embedded`, `tab`, `window` | `inherit` uses the user's default, then `ui.default_open_mode`. `embedded` becomes `tab` for `edm-direct` devices and for links that cannot be framed. |
 | tls_mode | `auto`, `modern`, `legacy` | `auto` tries TLS 1.2+ first and falls back to TLS 1.0–1.2 with old ciphers; the result is remembered. |
 | tls_pin | 64 hex characters | SHA-256 of the switch certificate; set by confirming it in the UI. |
 | isolation | `sandbox`, `off` | `off` disables the browser sandbox for this device (only if an EDM feature fails in it; see security.md). |
 | health | `true`, `false` | Include in the reachability checks. |
-| monitor_source | `none`, `snmp`, `edm` | Data source of the port dashboard. `edm` only for kind `ers-edm` (experimental). Default `none`. |
-| monitor_driver | `auto`, `generic`, `ers`, `cisco`, `tplink` | Which driver interprets the data. Default `auto`. |
+| monitor_source | `none`, `snmp`, `edm` | Data source of the port dashboard. `edm` only for kinds `ers-edm`, `vsp-edm` and `edm-direct` (experimental). Default `none`. |
+| monitor_driver | `auto`, `generic`, `ers`, `cisco`, `tplink`, `voss` | Which driver interprets the data. Default `auto`. |
 | monitor_interval | 30–3600 (seconds) | Polling interval; at least 60 for source `edm`. Default 60. |
-| snmp_version | `v2c`, `v3` | SNMP version. Default `v2c`. |
+| snmp_version | `v2c`, `v3` | SNMP version. Default `v2c`. In the web UI it is chosen together with the credentials. |
 | snmp_port | 1–65535 | UDP port of the SNMP agent. Default 161. |
 
-The SNMP community or v3 login is set in the web UI (card "SNMP access" on the edit page,
-write-only, password re-entry required). It is never part of an export or import file. Test it
+The SNMP community or v3 login is set in the web UI (when adding the device, or in the card
+"SNMP access" on the edit page; write-only, password re-entry required). It is never part of an export or import file. Test it
 with `ers-proxy snmp-test <device-id>`, or ad hoc with
 `ERSPROXY_SNMP_COMMUNITY=… ers-proxy snmp-test --host H [--port 161]`. ERS-Proxy only reads via
 SNMP; it never sends SET requests.

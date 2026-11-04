@@ -71,7 +71,10 @@ func Build(ctx context.Context, db *store.DB) (*Export, error) {
 			Notes: d.Notes, Sort: d.Sort, Health: &h, MonitorSource: d.MonitorSource, MonitorDriver: d.MonitorDriver,
 			MonitorInterval: d.MonitorInterval, SNMPVersion: d.SNMPVersion, SNMPPort: d.SNMPPort}
 		if d.Proxied() {
-			ed.Isolation, ed.TLSMode, ed.TLSPin = d.Isolation, d.TLSMode, d.TLSPin
+			ed.Isolation = d.Isolation
+		}
+		if d.EDM() {
+			ed.TLSMode, ed.TLSPin = d.TLSMode, d.TLSPin
 		}
 		out.Devices = append(out.Devices, ed)
 	}

@@ -18,6 +18,7 @@ import (
 	"github.com/lan-dot-party/ers-proxy/internal/app"
 	"github.com/lan-dot-party/ers-proxy/internal/auth"
 	"github.com/lan-dot-party/ers-proxy/internal/config"
+	"github.com/lan-dot-party/ers-proxy/internal/devices"
 	"github.com/lan-dot-party/ers-proxy/internal/secret"
 	"github.com/lan-dot-party/ers-proxy/internal/store"
 )
@@ -362,5 +363,95 @@ func TestSNMPCredentialsEndpoint(t *testing.T) {
 	h.post("/admin/devices/1/snmp", url.Values{"_csrf": {h.csrf}, "clear": {"1"}, "confirm_password": {"correct horse battery"}}, origin)
 	if d, _ = h.db.DeviceByID(ctx, 1); d.HasSNMPCredentials() {
 		t.Fatal("not cleared")
+	}
+}
+
+func TestSNMPOnCreateAndVersionSwitch(t *testing.T) {
+	h := newHarness(t)
+	h.user("admin", store.RoleAdmin)
+	h.login("admin")
+	origin := map[string]string{"Origin": h.srv.URL}
+	ctx := context.Background()
+	base := url.Values{"_csrf": {h.csrf}, "kind": {"vsp-edm"}, "url": {"https://192.0.2.20"},
+		"monitor_source": {"snmp"}, "monitor_interval": {"60"}, "snmp_port": {"161"}}
+	form := func(extra map[string]string) url.Values {
+		v := url.Values{}
+		for k, vs := range base {
+			v[k] = vs
+		}
+		for k, x := range extra {
+			v.Set(k, x)
+		}
+		return v
+	}
+	count := func() int {
+		ds, _ := h.db.ListDevices(ctx)
+		return len(ds)
+	}
+
+	// The new-device form offers the SNMP fields.
+	if _, body := h.get("/admin/devices/new"); !strings.Contains(body, `name="community"`) || !strings.Contains(body, `name="auth_password"`) {
+		t.Fatal("new-device form without SNMP fields")
+	}
+	// Without SNMP data no password is needed.
+	if r := h.post("/admin/devices", form(map[string]string{"name": "plain", "snmp_version": "v2c"}), origin); r.StatusCode != http.StatusSeeOther {
+		t.Fatalf("create without SNMP: %d", r.StatusCode)
+	}
+	// With SNMP data: wrong password or invalid data → nothing is created.
+	if r := h.post("/admin/devices", form(map[string]string{"name": "x", "snmp_version": "v2c", "community": "c0mm"}), origin); r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("SNMP without password: %d", r.StatusCode)
+	}
+	if r := h.post("/admin/devices", form(map[string]string{"name": "x", "snmp_version": "v3", "username": "mon",
+		"security_level": "authPriv", "auth_protocol": "SHA-256", "auth_password": "short", "priv_protocol": "AES-128",
+		"priv_password": "privpass1", "confirm_password": "correct horse battery"}), origin); r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid v3: %d", r.StatusCode)
+	}
+	if n := count(); n != 1 {
+		t.Fatalf("%d devices, want 1 (rejected forms must not create one)", n)
+	}
+	// Valid v3 with the password: created with version and credentials.
+	r := h.post("/admin/devices", form(map[string]string{"name": "VSP3", "snmp_version": "v3", "username": "mon",
+		"security_level": "authPriv", "auth_protocol": "SHA-256", "auth_password": "authpass1", "priv_protocol": "AES-128",
+		"priv_password": "privpass1", "confirm_password": "correct horse battery"}), origin)
+	if r.StatusCode != http.StatusSeeOther {
+		t.Fatalf("create with v3: %d", r.StatusCode)
+	}
+	ds, _ := h.db.ListDevices(ctx)
+	var d *store.Device
+	for _, x := range ds {
+		if x.Name == "VSP3" {
+			d = x
+		}
+	}
+	if d == nil || d.SNMPVersion != store.SNMPv3 || !d.HasSNMPCredentials() || bytes.Contains(d.SNMPCredentials, []byte("authpass1")) {
+		t.Fatalf("device: %+v", d)
+	}
+	c, err := devices.DecryptSNMP(h.ui.Key, d)
+	if err != nil || c.Username != "mon" || c.PrivProtocol != "AES-128" || c.Community != "" {
+		t.Fatalf("stored v3 credentials: %+v %v", c, err)
+	}
+
+	// The SNMP card switches the version together with the credentials.
+	id := itoa(d.ID)
+	if _, body := h.get("/admin/devices/" + id + "/edit"); !strings.Contains(body, `snmp-box snmp-v3`) {
+		t.Fatal("SNMP card not in v3 mode")
+	}
+	r = h.post("/admin/devices/"+id+"/snmp", url.Values{"_csrf": {h.csrf}, "snmp_version": {"v2c"}, "community": {"c0mmunity"},
+		"confirm_password": {"correct horse battery"}}, origin)
+	if loc := r.Header.Get("Location"); !strings.Contains(loc, "ok=saved") {
+		t.Fatalf("switch to v2c: %q", loc)
+	}
+	d, _ = h.db.DeviceByID(ctx, d.ID)
+	if c, _ := devices.DecryptSNMP(h.ui.Key, d); d.SNMPVersion != store.SNMPv2c || c.Community != "c0mmunity" {
+		t.Fatalf("after switch: version %s", d.SNMPVersion)
+	}
+	// Saving the main form keeps the version (the field is in the SNMP card now).
+	upd := form(map[string]string{"name": "VSP3"})
+	upd.Del("snmp_version")
+	if r := h.post("/admin/devices/"+id, upd, origin); r.StatusCode != http.StatusSeeOther {
+		t.Fatalf("update: %d", r.StatusCode)
+	}
+	if d, _ = h.db.DeviceByID(ctx, d.ID); d.SNMPVersion != store.SNMPv2c || !d.HasSNMPCredentials() {
+		t.Fatalf("main form changed the SNMP version or credentials: %s", d.SNMPVersion)
 	}
 }

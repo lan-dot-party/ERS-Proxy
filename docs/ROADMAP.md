@@ -13,7 +13,7 @@ then update this file, `architecture.md` and the changelog (see [CLAUDE.md](../C
 
 ## Current status
 
-_Last updated: 2026-11-03_
+_Last updated: 2026-11-04_
 
 | Phase | State |
 |---|---|
@@ -24,12 +24,29 @@ _Last updated: 2026-11-03_
 | 4 – Health checks | done |
 | 5 – Auto-login (experimental) | done (mock only) |
 | 6 – Hardware and 1.0 | in progress (6.1 partly) |
-| 7 – Port dashboard | done (verified on ERS 5632FD, T1500G-8T, SG2210P; stacks pending) |
+| 7 – Port dashboard | done (verified on ERS 5632FD, VSP 4850GTS, T1500G-8T, SG2210P; stacks pending) |
 
-**Done:** 0.1–0.3, 1.1–1.5, 2.1–2.5, 3.1–3.6, 4.1–4.2, 5.1–5.2, 7.1–7.11.
+**Done:** 0.1–0.3, 1.1–1.5, 2.1–2.5, 3.1–3.6, 4.1–4.2, 5.1–5.2, 7.1–7.13.
 
-**Next:** 6.1 – remaining hardware checks: Firefox and a stack (numbering of units 2–8), see
+**Next:** 6.1 – remaining hardware checks: a stack (numbering of units 2–8), Firefox on a real
+ERS (verified against the mock and on the VSPs), and
+"Open in EDM" for a port on an ERS (verified on the VSP only), SNMPv3 with authPriv on a real
+switch (snmpsim cannot test it), see
 [hardware-tests.md](hardware-tests.md). Then 6.2.
+
+**Verified on hardware (2026-11-04, step 7.13):** VSP 4850GTS as `vsp-edm`, embedded through the
+proxy in Chromium: auto-login and manual login, dialogs, a write (reverted), EDM's logout. Fixed
+on the way: keep-alive for proxied VOSS devices, and the manual login (the sandbox's missing
+`localStorage` made VOSS's login page send a fallback cookie to the switch; the shim now
+provides Web Storage). "Open in EDM" for a port opens the port's dialog, and reopening a device
+reuses its proxy session instead of logging in at the switch again. `edm-direct` devices now always open in a tab (embedded, the browser
+dropped their login cookie and hid the certificate warning).
+
+**Verified on hardware (2026-11-04, step 7.12):** VSP 4850GTS with VOSS 7.1.10.0 (HTTPS only).
+New device kind `edm-direct` (opened directly; VOSS's EDM needs no proxy) and driver `voss`;
+SNMP and EDM data source give the same ports, VLANs, tagging, LLDP and unit. Fixed on the way:
+VOSS login variant, `Connection: close` losing answers, `Oid_Conversion_Fail` truncating EDM
+tables, "half" duplex on ports without link. MLTs and channelized ports not yet seen on hardware.
 
 **Verified on hardware (2026-11-03, step 7.10):** TP-Link T1500G-8T and Omada SG2210P. Neither
 implements Q-BRIDGE; the `tplink` driver now reads TPLINK-DOT1Q-VLAN-MIB (PVID, tagged/untagged
@@ -181,6 +198,11 @@ Never write to a device: no SNMP sets, no EDM `setVariables`.
 - **7.10 TP-Link driver.** After an `snmp-capture` of a real T1500G (read-only, with approval):
   generic plus model, or TP-Link VLAN OIDs. *Done: TP-Link VLAN OIDs (TPLINK-DOT1Q-VLAN-MIB).*
 - **7.11 Documentation.** `docs/monitoring.md`, `docs/drivers.md`, configuration, security.
+- **7.12 VSP/VOSS.** Device kind `edm-direct` (EDM opened directly, server-side EDM only for the
+  data source), driver `voss`, VOSS login variant and EDM quirks. *Done: verified on a VSP
+  4850GTS (VOSS 7.1.10.0).*
+- **7.13 VSP through the proxy.** Device kind `vsp-edm`: VOSS's EDM embedded through the proxy
+  with auto-login; Web Storage for the sandbox in the shim. *Done: verified on the VSP 4850GTS.*
 
 ## Later
 

@@ -14,7 +14,7 @@
         <li class="device" data-name="{{.Name}} {{.URL}} {{.GroupName}}">
           <span class="dot dot-unknown" data-status="{{.ID}}" title="{{$.T "status.unknown"}}"></span>
           <a class="device-open" href="{{.Href}}" data-id="{{.ID}}" data-kind="{{.Kind}}" data-mode="{{.Mode}}" data-name="{{.Name}}"
-             {{if eq .Kind "link"}}rel="noopener noreferrer" referrerpolicy="no-referrer"{{end}}>{{.Name}}</a>
+             {{if .Direct}}rel="noopener noreferrer" referrerpolicy="no-referrer"{{end}}>{{.Name}}</a>
           {{if .Warn}}<span class="badge badge-warn" title="{{$.T (print "warn." .Warn)}}">!</span>{{end}}
           <span class="device-actions">
             <a class="icon-link" href="{{.Href}}" target="_blank" rel="noopener noreferrer" data-open-as="tab" title="{{$.T "ws.open_tab"}}" aria-label="{{$.T "ws.open_tab"}}">↗</a>

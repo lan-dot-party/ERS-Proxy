@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -138,6 +139,65 @@ func TestDropped(t *testing.T) {
 	} {
 		if dropped(err) != want {
 			t.Errorf("%v: want %v", err, want)
+		}
+	}
+}
+
+func TestKeepAliveHeader(t *testing.T) {
+	type rec struct {
+		conn   []string
+		closed bool
+		addr   string
+		body   string
+	}
+	run := func(keep bool) []rec {
+		var recs []rec
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			recs = append(recs, rec{r.Header["Connection"], r.Close, r.RemoteAddr, string(b)})
+			_, _ = w.Write([]byte("ok"))
+		}))
+		defer srv.Close()
+		c, err := New(Options{BaseURL: srv.URL, Timeout: 5 * time.Second, KeepAlive: keep})
+		if err != nil {
+			t.Fatal(err)
+		}
+		hc := &http.Client{Transport: c.Transport}
+		for i := 0; i < 2; i++ {
+			resp, err := hc.Get(srv.URL + "/")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
+		req, _ := http.NewRequestWithContext(WithRetry(context.Background()), http.MethodPost, srv.URL+"/x", strings.NewReader("command=getVariables"))
+		resp, err := hc.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return recs
+	}
+	r := run(true)
+	if len(r) != 3 {
+		t.Fatalf("requests: %d", len(r))
+	}
+	for i, x := range r {
+		if len(x.conn) != 1 || !strings.EqualFold(x.conn[0], "keep-alive") || x.closed {
+			t.Errorf("request %d: Connection=%v close=%v", i, x.conn, x.closed)
+		}
+	}
+	if r[0].addr == r[1].addr || r[1].addr == r[2].addr {
+		t.Errorf("connection reused: %s %s %s", r[0].addr, r[1].addr, r[2].addr)
+	}
+	if r[2].body != "command=getVariables" {
+		t.Errorf("POST body through keep-alive wrapper: %q", r[2].body)
+	}
+	r = run(false)
+	for i, x := range r {
+		if !x.closed {
+			t.Errorf("request %d without KeepAlive: Connection=%v close=%v", i, x.conn, x.closed)
 		}
 	}
 }

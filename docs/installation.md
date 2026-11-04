@@ -64,5 +64,9 @@ CGO_ENABLED=0 go build -trimpath -o ers-proxy ./cmd/ers-proxy
 - **ERS switch:** kind "ERS switch", address `http://<ip>` or `https://<ip>`. With HTTPS the
   first opening shows the certificate fingerprint; an admin confirms it once. Check what the
   switch supports with `ers-proxy tls-probe https://<ip>`.
+- **VSP switch (VOSS):** kind "EDM switch, opened directly", address `https://<ip>`. Its EDM
+  works in current browsers, so it is opened directly like a link. For the port dashboard use
+  SNMP, or the EDM data source after confirming the certificate on the device's edit page
+  (*Check and confirm certificate*) and storing an EDM login there.
 - **Any other device:** kind "Link", the full URL of its web interface. It opens directly; if
   the device forbids being embedded, ERS-Proxy opens it in a new browser tab.

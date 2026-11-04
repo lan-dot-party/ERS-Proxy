@@ -33,7 +33,7 @@ poller ──> Driver.Collect(ctx, Reader) ──> *monitor.Snapshot ──> Rat
   - `SkipPoE` leaves POWER-ETHERNET-MIB out; a driver with a vendor PoE table calls
     `Base.ReadPoE` only when that table is missing (`tplink` does this).
 - **`Driver`** interface:
-  - `Name()`: the identifier stored with a device (`generic`, `ers`, `cisco`, `tplink`).
+  - `Name()`: the identifier stored with a device (`generic`, `ers`, `cisco`, `tplink`, `voss`).
   - `Match(System) int`: how well the driver fits. `0` not at all, `10` generic fallback, `90`
     probably (for example by `sysDescr`), `100` made for this vendor (by `sysObjectID` prefix).
   - `Collect(ctx, Reader) (*Snapshot, error)`.
@@ -94,7 +94,7 @@ VLANs on the wrong ports.
    }
    ```
    Look at `generic.go` (Q-BRIDGE), `tplink.go` (vendor table with text port lists), `cisco.go` (vendor VLAN tables
-   with Q-BRIDGE fallback) and `ers.go` (own numbering, PortSet bitmaps, stack units). A failing
+   with Q-BRIDGE fallback) `ers.go` (own numbering, PortSet bitmaps, stack units) and `voss.go` (slot/port from `ifName`, reuses the ERS RAPID-CITY helpers). A failing
    optional read should add a note and keep going; only a missing system group or interface
    table is an error.
 4. **Register** it in `drivers.All()` (`generic.go`). Give `Match` a score of 100 for the

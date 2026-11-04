@@ -207,6 +207,11 @@ input[aria-invalid="true"] { border-color: var(--err); }
 .dot-off { background: var(--border); }
 .dot-cert { background: var(--warn); }
 form.device-kind-link .ers-only { display: none; }
+form.device-kind-edm-direct .proxy-only { display: none; }
+form:not(.device-kind-edm-direct) .direct-only { display: none; }
+.snmp-v2c .snmp-v3-only, .snmp-v3 .snmp-v2c-only { display: none; }
+.snmp-level-noAuthNoPriv .snmp-auth, .snmp-level-noAuthNoPriv .snmp-priv,
+.snmp-level-authNoPriv .snmp-priv { display: none; }
 
 /* Workspace: sidebar with devices on the left, tabs with frames on the right. */
 body.wide { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }

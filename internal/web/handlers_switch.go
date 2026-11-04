@@ -112,7 +112,7 @@ func (s *Server) lookupStatus(w http.ResponseWriter, r *http.Request) (poller.St
 
 func (s *Server) isEDM(r *http.Request, id int64) bool {
 	d, err := s.DB.DeviceByID(r.Context(), id)
-	return err == nil && d.Proxied()
+	return err == nil && d.EDM()
 }
 
 func (s *Server) switchPage(w http.ResponseWriter, r *http.Request) {

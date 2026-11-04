@@ -33,15 +33,15 @@ Browser ──HTTPS──> reverse proxy ──HTTP──> ers-proxy :9050
 | `internal/snmp` | gosnmp wrapper (from LANLeecher): `Credentials` v2c/v3, `Target`, `Dial`, `WalkColumn`, value helpers. Read-only: no SET API (a test parses the sources). |
 | `internal/snmptest` | Test helper: starts snmpsim (`$ERSPROXY_SNMPSIM`, `.venv`, or PATH) on `testdata/snmpsim/*.snmprec`; tests skip when it is missing or with `-short`. CI installs it with pip. |
 | `internal/monitor` | Port dashboard model: `Snapshot`, `Port`, `Reader` (objects by MIB name), `Driver`/`Registry`, `CollectBase` (IF-MIB, EtherLike, LAG, LLDP, PoE), `Objects` (name → OID), `Rates` (Counter64 deltas, wrap/reset/discontinuity) and `Diff` (port events). Read-only; `TestReadOnly` enforces it. See [drivers.md](drivers.md). |
-| `internal/monitor/drivers` | `generic` (Q-BRIDGE), `ers` (`rcVlan*`, MLT, stack units, 128/64 ifIndexes per unit), `cisco` (VTP, `vmVlan`, trunks), `tplink` (TPLINK-DOT1Q-VLAN-MIB, ports by `ifName`, Q-BRIDGE fallback). |
+| `internal/monitor/drivers` | `generic` (Q-BRIDGE), `ers` (`rcVlan*`, MLT, stack units, 128/64 ifIndexes per unit), `cisco` (VTP, `vmVlan`, trunks), `tplink` (TPLINK-DOT1Q-VLAN-MIB, ports by `ifName`, Q-BRIDGE fallback), `voss` (VSP/VOSS: slot/port from `ifName`, RAPID-CITY VLANs, port table and MLT shared with `ers`). |
 | `internal/monitor/snmpsrc` | `Reader` over SNMP (GET/GETBULK only) and `Capture` (anonymised `.snmprec` for device reports, `ers-proxy snmp-capture`). |
-| `internal/monitor/edmsrc` | `Reader` over EDM's `/jsp/getFormMibs.jsp` and `/jsp/getTableMibs.jsp` with a long-lived session per switch (experimental); `Tables` lists index objects per table. |
+| `internal/monitor/edmsrc` | `Reader` over EDM's `/jsp/getFormMibs.jsp` and `/jsp/getTableMibs.jsp` with a long-lived session per switch (experimental); `Tables` lists index objects per table. Names the switch answers with `Oid_Conversion_Fail` are dropped for the session and the table is asked again; `Session.Logout` ends a replaced session. |
 | `internal/monitor/poller` | One loop per monitored device: open reader (SNMP or EDM), detect driver, collect, rates, events, hand to the `Sink`; restarts a loop when the device's settings change. |
-| `internal/edmlogin` | Server-side EDM login shared by the proxy's auto-login and the EDM data source. |
+| `internal/edmlogin` | Server-side EDM login shared by the proxy's auto-login and the EDM data source. `Style` tells ERS (`encode_ers2500`: XHR check, length-prefixed `encoded`) from VOSS (`encode_vrf`: one form POST with `<user>:<password>`) by the login form. |
 | `internal/monitor/history` | `Recorder` (a `poller.Sink`): 1-minute samples per physical port/LAG with error deltas, port events, `Run` maintenance every 5 min (roll-up 60→900→3600 s, retention from `monitor.retention.*`), `Resolution`/`Series` for charts. |
 | `internal/web` | Portal handlers and templates (`html/template`, `static/app.js`, no inline code), i18n (en/de). Interfaces to the proxy (`Opener`), health (`StatusSource`) and diagnostics. |
 | `internal/web` (monitoring pages) | `/dashboard` (cards, `static/dashboard.js`, `/ui/monitor.json`), `/dashboard/{id}` (switch page: faceplate, sortable port and VLAN tables, events) and `/dashboard/{id}/port/{ifindex}` (port fields, events, SVG traffic charts rendered server-side in `chart.go`; hover and sorting in `static/switch.js`). Data comes from the `MonitorView` and `HistoryView` interfaces; 404 for unknown or unmonitored devices and ports. |
-| `internal/upstream` | Connection to one device: `http.Transport` with TLS profiles (`modern`, `legacy`), automatic fallback, pinning (`VerifyConnection`), tolerant status line (`fixConn`), `Probe` for confirmation and `tls-probe`. `Client.Transport` repeats reads (GET/HEAD and requests marked with `WithRetry`) up to six times (about 16 s) when the switch drops the connection quickly without an answer – its web server has only a few connection slots for all clients together. |
+| `internal/upstream` | Connection to one device: `http.Transport` with TLS profiles (`modern`, `legacy`), automatic fallback, pinning (`VerifyConnection`), tolerant status line (`fixConn`), `Probe` for confirmation and `tls-probe`. `Client.Transport` repeats reads (GET/HEAD and requests marked with `WithRetry`) up to six times (about 16 s) when the switch drops the connection quickly without an answer – its web server has only a few connection slots for all clients together. `Options.KeepAlive` (set for VOSS devices: `vsp-edm`, `edm-direct`) sends `Connection: keep-alive` instead of `close`, because VOSS resets connections it is asked to close and loses the body; connections are still not reused. |
 | `internal/edmproxy` | Proxy sessions (token registry, cookie jar), request/response pipeline, isolation headers, cookie shim, diagnostics per device. |
 | `internal/edmproxy/patches` | Content-based patches for EDM and HTML script injection. |
 | `internal/health` | Periodic reachability checks; certificate change detection; framing check for link devices. |
@@ -50,20 +50,36 @@ Browser ──HTTPS──> reverse proxy ──HTTP──> ers-proxy :9050
 
 ## Opening a device
 
-1. The sidebar link points to `/open/{id}` (ERS) or the device URL (link). `app.js` decides by
-   the effective open mode (device → user → `ui.default_open_mode`): an iframe tab, a new
-   browser tab, or a popup.
-2. `/open/{id}` requires a session and refuses `Sec-Fetch-Site: cross-site`. For HTTPS devices
-   without a pin it renders the certificate confirmation page (`trust.html`, frameable).
+1. The sidebar link points to `/open/{id}` (ers-edm, vsp-edm) or the device URL (link and edm-direct,
+   `Device.Direct()`). `app.js` decides by the effective open mode (device → user →
+   `ui.default_open_mode`): an iframe tab, a new browser tab, or a popup. `edm-direct` devices
+   never get an iframe tab (`EffectiveOpenMode` turns `embedded` into `tab`): in a frame the
+   switch is a third party, so the browser drops its login cookie and shows no certificate
+   warning. Links that cannot be framed (plain HTTP in an HTTPS portal, framing ban seen by the
+   health check) fall back the same way.
+2. `/open/{id}` requires a session and refuses `Sec-Fetch-Site: cross-site`. Direct devices are
+   redirected to their URL. For proxied HTTPS devices without a pin it renders the certificate
+   confirmation page (`trust.html`, frameable). Edm-direct devices are never opened through
+   ERS-Proxy, so their certificate is confirmed from the edit page
+   (`/admin/devices/{id}/trust`) before the EDM data source can connect.
 3. `edmproxy.Open` creates a proxy session: a 128-bit token bound to the login session and the
-   device, with its own cookie jar. Redirect to `/d/{token}/`.
+   device, with its own cookie jar. Redirect to `/d/{token}/`. A session of the same login
+   session for the same device that was used in the last 10 minutes and not logged out of EDM
+   (`/logout.html` seen) is reused instead, so a workspace reload or "Open in EDM" does not
+   log in at the switch again (VSP switches allow only a few EDM sessions). `?port=<ifIndex>`
+   ("Open in EDM" for a port) is stored in the session's page storage (`x:port`); the shim
+   then selects `Port_<ifIndex>` in EDM's device view and opens its dialog with a click and a
+   double-click (on ERS it first brings the device view's tab to the front). It repeats the
+   double-click every 2 s until a dialog tab appears, because EDM draws the ports before it
+   has loaded what the dialog needs (VOSS 8 ignores an early double-click).
 
 ## Proxy pipeline (`edmproxy.Proxy.ServeHTTP`)
 
 1. Resolve the token; end the session if idle (`proxy.idle_timeout`) or if the login session is
    gone (checked every 30 s).
 2. Answer locally: CORS preflight (`OPTIONS`), `__ersproxy/shim.js`, `__ersproxy/cookie`
-   (cookies written by page script).
+   (cookies written by page script), `__ersproxy/storage` (snapshots of the page's Web Storage,
+   see below).
 3. Otherwise forward with `httputil.ReverseProxy`:
    - **request:** strip the `/d/{token}` prefix, set `Host`, drop browser cookies, `Origin`,
      `Referer`, forwarding and fetch-metadata headers, `Accept-Encoding` and the browser's cache
@@ -84,6 +100,13 @@ Isolation headers (sandbox mode): `Content-Security-Policy: sandbox allow-script
 allow-popups allow-modals allow-downloads; frame-ancestors 'self'`,
 `Access-Control-Allow-Origin: null`, `Access-Control-Expose-Headers: *` (EDM reads `Server`),
 `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`.
+
+Shim (`shim.go`, injected into every proxied document): `document.cookie` from the jar (writes
+go to the jar), the reason phrase helper, the export/print window stand-in, and – only where
+the sandbox blocks Web Storage – `localStorage`/`sessionStorage`. These keep their data in the
+proxy session (`pageStorage`, at most 64 KiB, newest snapshot wins, never sent to the switch).
+Without them VOSS's login page falls back to a `storeEDMUser` cookie, which the jar would send
+to the switch, and the switch rejects the login.
 
 ## EDM specifics
 
@@ -111,7 +134,7 @@ allow-popups allow-modals allow-downloads; frame-ancestors 'self'`,
 
 Migration `00001_init.sql`: `users` (role `user`/`admin`, language, theme, default open mode),
 `sessions` (SHA-256 of the cookie, CSRF token, sliding 12 h expiry), `device_groups`,
-`devices` (kind, URL, open mode, isolation, TLS mode/pin/profile, encrypted credentials,
+`devices` (kind `ers-edm`/`vsp-edm`/`edm-direct`/`link` – a TEXT column, so new kinds need no migration; URL, open mode, isolation, TLS mode/pin/profile, encrypted credentials,
 auto-login flag, health flag, notes, sort), `audit_log`. Proxy sessions, cookie jars, health
 state and diagnostics live in memory only.
 

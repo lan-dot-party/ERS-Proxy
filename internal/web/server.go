@@ -101,11 +101,12 @@ func New(a *app.App) (*Server, error) {
 
 var funcs = template.FuncMap{
 	"themes":         func() []string { return store.Themes },
+	"hasPrefix":      strings.HasPrefix,
 	"openModes":      func() []string { return []string{config.OpenEmbedded, config.OpenTab, config.OpenWindow} },
 	"tlsModes":       func() []string { return []string{store.TLSAuto, store.TLSModern, store.TLSLegacy} },
 	"monitorSources": func() []string { return []string{store.MonitorNone, store.MonitorSNMP, store.MonitorEDM} },
 	"monitorDrivers": func() []string {
-		return []string{store.DriverAuto, store.DriverGeneric, store.DriverERS, store.DriverCisco, store.DriverTPLink}
+		return []string{store.DriverAuto, store.DriverGeneric, store.DriverERS, store.DriverCisco, store.DriverTPLink, store.DriverVOSS}
 	},
 	"snmpVersions":   func() []string { return snmp.Versions },
 	"securityLevels": func() []string { return snmp.SecurityLevels },
@@ -157,6 +158,7 @@ func (s *Server) Routes() http.Handler {
 			r.Post("/admin/devices/{id}/credentials", s.deviceCredentials)
 			r.Post("/admin/devices/{id}/snmp", s.deviceSNMP)
 			r.Post("/admin/devices/{id}/tls", s.deviceTLS)
+			r.Get("/admin/devices/{id}/trust", s.deviceTrust)
 			r.Get("/admin/groups", s.groups)
 			r.Post("/admin/groups", s.groupCreate)
 			r.Post("/admin/groups/{id}", s.groupUpdate)

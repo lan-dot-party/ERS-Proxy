@@ -18,7 +18,7 @@
   <form method="post" action="/admin/devices/{{$d.ID}}/tls" class="actions">
     <input type="hidden" name="_csrf" value="{{.CSRF}}">
     <input type="hidden" name="pin" value="{{$p.Cert.Fingerprint}}">
-    <input type="hidden" name="back" value="/open/{{$d.ID}}">
+    {{with .Data.Back}}<input type="hidden" name="back" value="{{.}}">{{end}}
     <button type="submit" class="primary">{{.T "trust.confirm"}}</button>
   </form>
   {{else}}

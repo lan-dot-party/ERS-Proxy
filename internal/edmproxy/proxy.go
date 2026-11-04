@@ -93,15 +93,35 @@ func (p *Proxy) Open(w http.ResponseWriter, r *http.Request, d *store.Device) {
 		http.Error(w, "login required", http.StatusUnauthorized)
 		return
 	}
-	ps := p.reg.create(sess.ID, u, d)
-	p.withDiag(d.ID, func(dg *Diag) { dg.LastOpened = time.Now() })
-	if d.AutoLogin && d.HasCredentials() {
-		p.tryAutoLogin(r.Context(), ps)
+	now := time.Now()
+	ps := p.reg.reuse(sess.ID, d.ID, now)
+	if ps != nil {
+		ps.lastUsed.Store(now.UnixNano())
+		p.log.Debug("device opened (session reused)", "device", d.Name, "user", u.Username)
+	} else {
+		ps = p.reg.create(sess.ID, u, d)
+		if d.AutoLogin && d.HasCredentials() {
+			p.tryAutoLogin(r.Context(), ps)
+		}
+		p.log.Debug("device opened", "device", d.Name, "user", u.Username)
 	}
-	p.log.Debug("device opened", "device", d.Name, "user", u.Username)
+	p.withDiag(d.ID, func(dg *Diag) { dg.LastOpened = now })
+	// "Open in EDM" for a port: the shim selects it and opens its dialog.
+	if port := r.URL.Query().Get("port"); validPort(port) {
+		ps.storage.setKey(portKey, port)
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	http.Redirect(w, r, "/d/"+ps.token+"/", http.StatusSeeOther)
+}
+
+// portKey is the page storage key of the port the shim should select.
+const portKey = "x:port"
+
+// validPort reports whether s is an ifIndex (1–999999).
+func validPort(s string) bool {
+	n, err := strconv.Atoi(s)
+	return err == nil && n > 0 && n < 1000000 && strconv.Itoa(n) == s
 }
 
 // tryAutoLogin logs in with the stored credentials. A failure is recorded in
@@ -184,7 +204,7 @@ func (p *Proxy) withDiag(id int64, fn func(*Diag)) {
 func (p *Proxy) Client(d *store.Device) (*upstream.Client, error) { return p.client(d) }
 
 func (p *Proxy) client(d *store.Device) (*upstream.Client, error) {
-	sig := d.URL + "|" + d.TLSMode + "|" + d.TLSPin
+	sig := d.Kind + "|" + d.URL + "|" + d.TLSMode + "|" + d.TLSPin
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if e := p.clients[d.ID]; e != nil && e.sig == sig {
@@ -198,6 +218,8 @@ func (p *Proxy) client(d *store.Device) (*upstream.Client, error) {
 		Profile:  d.TLSProfile,
 		MaxConns: p.app.Cfg.Proxy.MaxConnsPerDevice,
 		Timeout:  p.app.Cfg.Proxy.RequestTimeout,
+		// VSP switches (VOSS) drop answers on "Connection: close".
+		KeepAlive: d.VOSS(),
 		OnProfile: func(profile string) {
 			p.log.Info("TLS profile selected", "device", d.Name, "profile", profile)
 			if err := p.app.DB.SetDeviceTLSProfile(context.Background(), id, profile); err != nil {
@@ -271,6 +293,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ps.validated.Store(now.UnixNano())
 	}
 	ps.lastUsed.Store(now.UnixNano())
+	if sub == "/logout.html" || sub == "/logout_apls.html" {
+		ps.loggedOut.Store(true) // EDM's logout (ERS and VOSS): do not reuse
+	}
 	sandbox := ps.device.Isolation != store.IsolationOff
 	isolationHeaders(w.Header(), sandbox)
 	base := "/d/" + token + "/"
@@ -290,12 +315,23 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case sub == shimPath:
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		_, _ = io.WriteString(w, shimJS(ps.jar.script(), base))
+		_, _ = io.WriteString(w, shimJS(ps.jar.script(), ps.storage.script(), base))
 		return
 	case sub == cookiePath && r.Method == http.MethodPost:
 		data, err := io.ReadAll(io.LimitReader(r.Body, 4096))
 		if err == nil {
 			ps.jar.set(string(data))
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	case sub == storagePath && r.Method == http.MethodPost:
+		data, err := io.ReadAll(io.LimitReader(r.Body, maxPageStorage+64))
+		if err == nil {
+			err = ps.storage.set(string(data))
+		}
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 		return

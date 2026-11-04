@@ -133,7 +133,8 @@ func ersPortExtras(ctx context.Context, r monitor.Reader, snap *monitor.Snapshot
 				p.Speed = mbps * 1_000_000
 			}
 		}
-		if p.Duplex == "" {
+		// Ports without link report half duplex; show nothing for them.
+		if p.Duplex == "" && p.Up() {
 			switch d, _ := row["rcPortOperDuplex"].AsInt(); d {
 			case 1:
 				p.Duplex = "half"

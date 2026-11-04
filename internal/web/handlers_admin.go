@@ -91,7 +91,9 @@ func readDevice(r *http.Request, d *store.Device) {
 	d.MonitorSource = r.PostFormValue("monitor_source")
 	d.MonitorDriver = r.PostFormValue("monitor_driver")
 	d.MonitorInterval, _ = strconv.Atoi(strings.TrimSpace(r.PostFormValue("monitor_interval")))
-	d.SNMPVersion = r.PostFormValue("snmp_version")
+	if v := r.PostFormValue("snmp_version"); v != "" { // set in the SNMP card (older forms: here)
+		d.SNMPVersion = v
+	}
 	d.SNMPPort, _ = strconv.Atoi(strings.TrimSpace(r.PostFormValue("snmp_port")))
 }
 
@@ -110,11 +112,36 @@ func (s *Server) deviceCreate(w http.ResponseWriter, r *http.Request) {
 		s.deviceForm(w, r, http.StatusUnprocessableEntity, d, true, fieldKey(err))
 		return
 	}
+	// SNMP access can be entered right away. It is checked before the device
+	// is created; it can only be encrypted once the device has its ID.
+	version, snmpCreds, withSNMP := readSNMP(r, d.SNMPVersion)
+	if withSNMP {
+		d.SNMPVersion = version
+		if !validSNMP(d, version, snmpCreds) {
+			s.deviceForm(w, r, http.StatusUnprocessableEntity, d, true, "snmp_invalid")
+			return
+		}
+		if !s.confirmPassword(r) {
+			s.deviceForm(w, r, http.StatusUnprocessableEntity, d, true, "wrong_password")
+			return
+		}
+	}
 	if err := s.DB.CreateDevice(r.Context(), d); err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	s.Audit(r, "device.create", d.Name, d.Kind+" "+d.URL)
+	if withSNMP {
+		enc, err := devices.EncryptSNMP(s.Key, d, snmpCreds)
+		if err == nil {
+			err = s.DB.SetDeviceSNMPCredentials(r.Context(), d.ID, enc)
+		}
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		s.Audit(r, "device.snmp.set", d.Name, "SNMP"+version) // never the values
+	}
 	s.UpdateFrameSources(r.Context())
 	s.deviceChanged(d.ID)
 	redirect(w, r, "/admin/devices?ok=saved")
@@ -244,6 +271,41 @@ func (s *Server) deviceCredentials(w http.ResponseWriter, r *http.Request) {
 	redirect(w, r, back+"?ok=saved")
 }
 
+// readSNMP reads the SNMP version and credentials of the SNMP fields (edit
+// page card and new-device form). The version is chosen in the same form and
+// saved with the credentials; fallback is used when the form has none. given
+// reports whether anything was entered (community or v3 user name).
+func readSNMP(r *http.Request, fallback string) (version string, c snmp.Credentials, given bool) {
+	version = r.PostFormValue("snmp_version")
+	if version == "" {
+		version = fallback
+	}
+	if version == store.SNMPv3 {
+		c = snmp.Credentials{
+			Username:      strings.TrimSpace(r.PostFormValue("username")),
+			SecurityLevel: r.PostFormValue("security_level"),
+			ContextName:   strings.TrimSpace(r.PostFormValue("context_name")),
+		}
+		if c.SecurityLevel != "noAuthNoPriv" {
+			c.AuthProtocol = r.PostFormValue("auth_protocol")
+			c.AuthPassword = r.PostFormValue("auth_password")
+		}
+		if c.SecurityLevel == "authPriv" {
+			c.PrivProtocol = r.PostFormValue("priv_protocol")
+			c.PrivPassword = r.PostFormValue("priv_password")
+		}
+		return version, c, c.Username != ""
+	}
+	c.Community = r.PostFormValue("community")
+	return version, c, c.Community != ""
+}
+
+// validSNMP checks SNMP credentials for d.
+func validSNMP(d *store.Device, version string, c snmp.Credentials) bool {
+	host, _ := devices.HostPort(d.URL)
+	return (snmp.Target{Host: host, Version: version, Creds: c}).Validate() == nil && len(c.Community) <= 128
+}
+
 // deviceSNMP stores or clears the SNMP credentials. The form is write-only:
 // stored values are never shown again.
 func (s *Server) deviceSNMP(w http.ResponseWriter, r *http.Request) {
@@ -266,28 +328,17 @@ func (s *Server) deviceSNMP(w http.ResponseWriter, r *http.Request) {
 		redirect(w, r, back+"?ok=saved")
 		return
 	}
-	var c snmp.Credentials
-	if d.SNMPVersion == store.SNMPv3 {
-		c = snmp.Credentials{
-			Username:      strings.TrimSpace(r.PostFormValue("username")),
-			SecurityLevel: r.PostFormValue("security_level"),
-			ContextName:   strings.TrimSpace(r.PostFormValue("context_name")),
-		}
-		if c.SecurityLevel != "noAuthNoPriv" {
-			c.AuthProtocol = r.PostFormValue("auth_protocol")
-			c.AuthPassword = r.PostFormValue("auth_password")
-		}
-		if c.SecurityLevel == "authPriv" {
-			c.PrivProtocol = r.PostFormValue("priv_protocol")
-			c.PrivPassword = r.PostFormValue("priv_password")
-		}
-	} else {
-		c.Community = r.PostFormValue("community")
-	}
-	host, _ := devices.HostPort(d.URL)
-	if err := (snmp.Target{Host: host, Version: d.SNMPVersion, Creds: c}).Validate(); err != nil || len(c.Community) > 128 {
+	version, c, _ := readSNMP(r, d.SNMPVersion)
+	if !validSNMP(d, version, c) {
 		redirect(w, r, back+"?err=snmp_invalid")
 		return
+	}
+	if version != d.SNMPVersion {
+		d.SNMPVersion = version
+		if err := s.DB.UpdateDevice(r.Context(), d); err != nil {
+			s.fail(w, r, err)
+			return
+		}
 	}
 	enc, err := devices.EncryptSNMP(s.Key, d, c)
 	if err != nil {
@@ -298,7 +349,7 @@ func (s *Server) deviceSNMP(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	s.Audit(r, "device.snmp.set", d.Name, "") // never the values
+	s.Audit(r, "device.snmp.set", d.Name, "SNMP"+version) // never the values
 	s.deviceChanged(d.ID)
 	redirect(w, r, back+"?ok=saved")
 }

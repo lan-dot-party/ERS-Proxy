@@ -1,8 +1,12 @@
 package edmproxy
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +30,10 @@ type proxySession struct {
 	device   *store.Device
 	created  time.Time
 	jar      *jar
+	storage  pageStorage
+	// loggedOut is set once the page asked the switch to log out; such a
+	// session is not reused.
+	loggedOut atomic.Bool
 	// lastUsed and validated (last check that the login session still exists)
 	// are Unix nanoseconds, updated by concurrent requests.
 	lastUsed  atomic.Int64
@@ -68,6 +76,30 @@ func (r *registry) create(loginID string, u *store.User, d *store.Device) *proxy
 		}
 	}
 	return s
+}
+
+// reuseWindow is how long after its last request a proxy session may be
+// reused when the same login session opens the same device again (a reload of
+// the workspace, "Open in EDM" from the dashboard). The switch keeps its EDM
+// session for about 20 minutes; VSP switches allow only a few at a time, so
+// opening the device must not log in anew every time.
+const reuseWindow = 10 * time.Minute
+
+// reuse returns the most recently used session of loginID for device id that
+// was used within reuseWindow and not logged out, or nil.
+func (r *registry) reuse(loginID string, id int64, now time.Time) *proxySession {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var best *proxySession
+	for _, s := range r.byTok {
+		if s.loginID != loginID || s.device.ID != id || s.loggedOut.Load() || s.idle(now) > reuseWindow {
+			continue
+		}
+		if best == nil || s.lastUsed.Load() > best.lastUsed.Load() {
+			best = s
+		}
+	}
+	return best
 }
 
 func (r *registry) get(token string) *proxySession {
@@ -198,4 +230,66 @@ func (j *jar) set(raw string) {
 		return
 	}
 	j.cookies[name] = &http.Cookie{Name: name, Value: value}
+}
+
+// maxPageStorage limits the Web Storage of one proxy session (keys and values
+// as JSON).
+const maxPageStorage = 64 << 10
+
+// pageStorage keeps localStorage and sessionStorage of the sandboxed EDM
+// page, which has no Web Storage of its own (see shimJS). It lives in memory
+// with the proxy session and is never sent to the switch.
+type pageStorage struct {
+	mu   sync.Mutex
+	seq  int64
+	data string // JSON object of strings ("" = empty)
+}
+
+// set takes a snapshot "<seq>\n<JSON object of strings>" from the shim.
+// Snapshots may arrive out of order, so an older seq is ignored.
+func (s *pageStorage) set(body string) error {
+	head, data, ok := strings.Cut(body, "\n")
+	seq, err := strconv.ParseInt(head, 10, 64)
+	if !ok || err != nil {
+		return errors.New("bad storage snapshot")
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(data), &m); err != nil {
+		return fmt.Errorf("bad storage snapshot: %w", err)
+	}
+	out, _ := json.Marshal(m)
+	if len(out) > maxPageStorage {
+		return errors.New("storage snapshot too large")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if seq > s.seq {
+		s.seq, s.data = seq, string(out)
+	}
+	return nil
+}
+
+// setKey sets one key of the stored object (server side, e.g. the port to
+// select). The snapshot sequence stays, so the next snapshot of the page
+// replaces it as usual.
+func (s *pageStorage) setKey(k, v string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m := map[string]string{}
+	if s.data != "" {
+		_ = json.Unmarshal([]byte(s.data), &m)
+	}
+	m[k] = v
+	out, _ := json.Marshal(m)
+	s.data = string(out)
+}
+
+// script returns the stored object as JSON for the shim.
+func (s *pageStorage) script() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.data == "" {
+		return "{}"
+	}
+	return s.data
 }

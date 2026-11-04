@@ -4,7 +4,7 @@
 <div class="page-head">
   <h1>{{.Switch.Name}} · {{.Label}}{{if and .Port.Name (ne .Port.Name .Label)}} <span class="muted">({{.Port.Name}})</span>{{end}}</h1>
   <div class="actions">
-    {{if .Switch.EDM}}<a class="button primary" href="/?open={{.Switch.ID}}">{{$.T "dash.open_edm"}}</a>{{end}}
+    {{if .Switch.EDM}}<a class="button primary" href="/?open={{.Switch.ID}}&amp;port={{.Port.IfIndex}}">{{$.T "dash.open_edm"}}</a>{{end}}
     <a class="button" href="{{.Base}}">{{$.T "sw.back_switch"}}</a>
   </div>
 </div>

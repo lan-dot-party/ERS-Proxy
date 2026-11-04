@@ -40,7 +40,10 @@ type workspaceData struct {
 }
 
 // EffectiveOpenMode resolves device → user → global default. Link devices
-// that cannot be embedded open in a new browser tab instead.
+// that cannot be embedded open in a new browser tab instead. edm-direct
+// devices never open embedded: in a frame the switch is a third party, so
+// browsers drop its login cookie (the login fails with "Authentication
+// Failed") and show no certificate warning (the frame stays empty).
 func (s *Server) EffectiveOpenMode(u *store.User, d *store.Device) string {
 	mode := d.OpenMode
 	if mode == "" || mode == store.OpenInherit {
@@ -52,8 +55,8 @@ func (s *Server) EffectiveOpenMode(u *store.User, d *store.Device) string {
 			mode = s.Cfg.UI.DefaultOpenMode
 		}
 	}
-	if mode == config.OpenEmbedded && d.Kind == store.KindLink {
-		if !s.linkEmbeddable(d) {
+	if mode == config.OpenEmbedded && d.Direct() {
+		if d.Kind == store.KindEDMDirect || !s.linkEmbeddable(d) {
 			mode = config.OpenTab
 		}
 	}
@@ -84,7 +87,7 @@ func (s *Server) sidebar(r *http.Request) (*workspaceData, error) {
 	idx := map[string]int{}
 	for _, d := range devs {
 		sd := sidebarDevice{Device: d, Mode: s.EffectiveOpenMode(u, d), Href: "/open/" + strconv.FormatInt(d.ID, 10)}
-		if d.Kind == store.KindLink {
+		if d.Direct() {
 			sd.Href = d.URL
 		}
 		switch {
@@ -116,7 +119,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 }
 
 // open sends the browser to a device: proxied devices through the EDM proxy
-// (which creates a proxy session), links directly.
+// (which creates a proxy session), link and edm-direct devices directly.
 func (s *Server) open(w http.ResponseWriter, r *http.Request) {
 	frameable(w)
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
@@ -137,7 +140,7 @@ func (s *Server) open(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	if d.Kind == store.KindLink {
+	if d.Direct() {
 		http.Redirect(w, r, d.URL, http.StatusSeeOther)
 		return
 	}
@@ -146,20 +149,37 @@ func (s *Server) open(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasPrefix(d.URL, "https://") && d.TLSPin == "" {
-		s.trust(w, r, d)
+		s.showTrust(w, r, d, "/open/"+strconv.FormatInt(d.ID, 10))
 		return
 	}
 	s.Opener.Open(w, r, d)
 }
 
+// deviceTrust shows the certificate of an edm-direct device for confirmation
+// from its settings page; the browser never opens such devices through
+// ERS-Proxy, but the EDM data source connects with the pin.
+func (s *Server) deviceTrust(w http.ResponseWriter, r *http.Request) {
+	d, ok := s.loadDevice(w, r)
+	if !ok {
+		return
+	}
+	if !d.EDM() || !strings.HasPrefix(d.URL, "https://") {
+		s.errorPage(w, r, http.StatusNotFound, "error.not_found")
+		return
+	}
+	s.showTrust(w, r, d, "")
+}
+
 type trustData struct {
 	Device *store.Device
 	Probe  *upstream.ProbeResult
+	// Back is where the confirmation continues ("" = the device settings).
+	Back string
 }
 
-// trust shows the certificate of an HTTPS device for confirmation (trust on
-// first use). Only admins can confirm it.
-func (s *Server) trust(w http.ResponseWriter, r *http.Request, d *store.Device) {
+// showTrust shows the certificate of an HTTPS device for confirmation (trust
+// on first use). Only admins can confirm it.
+func (s *Server) showTrust(w http.ResponseWriter, r *http.Request, d *store.Device, back string) {
 	probe := s.Probe
 	if probe == nil {
 		probe = func(ctx context.Context, d *store.Device) *upstream.ProbeResult {
@@ -168,7 +188,7 @@ func (s *Server) trust(w http.ResponseWriter, r *http.Request, d *store.Device) 
 		}
 	}
 	res := probe(r.Context(), d)
-	p := s.page(r, "trust.title", "", trustData{Device: d, Probe: res})
+	p := s.page(r, "trust.title", "", trustData{Device: d, Probe: res, Back: back})
 	s.render(w, r, "trust", p)
 }
 
@@ -194,7 +214,8 @@ func (s *Server) statusJSON(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
-// UpdateFrameSources recomputes the CSP frame-src list from the link devices.
+// UpdateFrameSources recomputes the CSP frame-src list from the devices the
+// browser opens directly (link and edm-direct).
 func (s *Server) UpdateFrameSources(ctx context.Context) {
 	devs, err := s.DB.ListDevices(ctx)
 	if err != nil {
@@ -204,7 +225,7 @@ func (s *Server) UpdateFrameSources(ctx context.Context) {
 	seen := map[string]bool{}
 	var origins []string
 	for _, d := range devs {
-		if d.Kind != store.KindLink {
+		if !d.Direct() {
 			continue
 		}
 		if o := devices.Origin(d.URL); o != "" && !seen[o] {

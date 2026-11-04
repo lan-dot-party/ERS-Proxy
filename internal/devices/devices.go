@@ -74,12 +74,20 @@ func Normalize(d *store.Device) error {
 		return err
 	}
 	switch d.Kind {
-	case store.KindERS:
+	case store.KindERS, store.KindVSP:
 		u, err := normalizeBase(d.URL)
 		if err != nil {
 			return err
 		}
 		d.URL = u
+	case store.KindEDMDirect:
+		u, err := normalizeBase(d.URL)
+		if err != nil {
+			return err
+		}
+		d.URL = u
+		// Not proxied: isolation and auto-login do not apply.
+		d.Isolation, d.AutoLogin = store.IsolationSandbox, false
 	case store.KindLink:
 		u, err := normalizeLink(d.URL)
 		if err != nil {
@@ -89,13 +97,13 @@ func Normalize(d *store.Device) error {
 		// Isolation and TLS settings only apply to proxied devices.
 		d.Isolation, d.TLSMode, d.TLSPin = store.IsolationSandbox, store.TLSAuto, ""
 	default:
-		return fieldErr("kind", "kind %q: want ers-edm or link", d.Kind)
+		return fieldErr("kind", "kind %q: want ers-edm, vsp-edm, edm-direct or link", d.Kind)
 	}
 	return nil
 }
 
 // normalizeMonitoring validates the monitoring settings and fills defaults.
-// Kind is checked by the caller; the EDM source needs an ERS switch.
+// Kind is checked by the caller; the EDM source needs an EDM switch.
 func normalizeMonitoring(d *store.Device) error {
 	if d.MonitorSource == "" {
 		d.MonitorSource = store.MonitorNone
@@ -103,8 +111,8 @@ func normalizeMonitoring(d *store.Device) error {
 	switch d.MonitorSource {
 	case store.MonitorNone, store.MonitorSNMP:
 	case store.MonitorEDM:
-		if d.Kind != store.KindERS {
-			return fieldErr("monitor_source", "the EDM data source needs a device of kind ers-edm")
+		if !d.EDM() {
+			return fieldErr("monitor_source", "the EDM data source needs a device of kind ers-edm, vsp-edm or edm-direct")
 		}
 	default:
 		return fieldErr("monitor_source", "monitor source %q: want none, snmp or edm", d.MonitorSource)
@@ -113,9 +121,9 @@ func normalizeMonitoring(d *store.Device) error {
 		d.MonitorDriver = store.DriverAuto
 	}
 	switch d.MonitorDriver {
-	case store.DriverAuto, store.DriverGeneric, store.DriverERS, store.DriverCisco, store.DriverTPLink:
+	case store.DriverAuto, store.DriverGeneric, store.DriverERS, store.DriverCisco, store.DriverTPLink, store.DriverVOSS:
 	default:
-		return fieldErr("monitor_driver", "monitor driver %q: want auto, generic, ers, cisco or tplink", d.MonitorDriver)
+		return fieldErr("monitor_driver", "monitor driver %q: want auto, generic, ers, cisco, tplink or voss", d.MonitorDriver)
 	}
 	if d.MonitorInterval == 0 {
 		d.MonitorInterval = DefaultMonitorInterval

@@ -69,6 +69,9 @@ type Mock struct {
 	Requests map[string]int
 	// LastCookie is the Cookie header of the last request (for tests).
 	LastCookie string
+	// LastClose reports whether the last request asked to close the
+	// connection ("Connection: close", for tests).
+	LastClose bool
 	// Sets records setVariables requests (for tests).
 	Sets []string
 }
@@ -113,6 +116,7 @@ func (m *Mock) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.mu.Lock()
 	m.Requests[r.URL.Path]++
 	m.LastCookie = r.Header.Get("Cookie")
+	m.LastClose = r.Close
 	m.mu.Unlock()
 	// Like the real web server (Rapid Logic/1.1, ERS 5600 firmware 6.6): any
 	// request with "Cache-Control: max-age=0" gets an empty 304, even a POST
