@@ -18,7 +18,10 @@ import (
 //     64 ifIndexes per slot); channelized ports are "slot/port/channel";
 //   - VLANs, tagging, speed/duplex and MLTs use the same RAPID-CITY tables as
 //     ERS switches (rcVlan*, rcPortOper*, rcMlt*); PortSet bit i is ifIndex i;
-//   - VLAN interfaces have ifIndex 2048 + VLAN ID (ifType l2vlan).
+//   - VLAN interfaces have ifIndex 2048 + VLAN ID (ifType l2vlan);
+//   - rcVlanPortPerformTagging is a TruthValue (1 tag, 2 untag); a tagging
+//     port with rcVlanPortUntagDefaultVlan = 1 sends its PVID untagged
+//     (hybrid; seen on a VSP 8404 with VOSS 8.10).
 type VOSS struct{}
 
 // Name implements monitor.Driver.
@@ -117,7 +120,7 @@ func (VOSS) Collect(ctx context.Context, r monitor.Reader) (*monitor.Snapshot, e
 	}
 	vossUnits(ctx, r, snap)
 	ersPortExtras(ctx, r, snap)
-	if err := ersVLANs(ctx, r, snap); err != nil {
+	if err := ersVLANs(ctx, r, snap, true); err != nil {
 		snap.Notes = append(snap.Notes, "VLANs: "+err.Error())
 	}
 	ersMLT(ctx, r, snap)

@@ -61,6 +61,10 @@ CGO_ENABLED=0 go build -trimpath -o ers-proxy ./cmd/ers-proxy
 
 ## First device
 
+*Settings › Devices › Add switch* opens one form for every kind of device; choose the kind
+there. The section *Credentials* takes the switch login and SNMP access right away (optional;
+your own password confirms them once).
+
 - **ERS switch:** kind "ERS switch", address `http://<ip>` or `https://<ip>`. With HTTPS the
   first opening shows the certificate fingerprint; an admin confirms it once. Check what the
   switch supports with `ers-proxy tls-probe https://<ip>`.
@@ -68,5 +72,9 @@ CGO_ENABLED=0 go build -trimpath -o ers-proxy ./cmd/ers-proxy
   works in current browsers, so it is opened directly like a link. For the port dashboard use
   SNMP, or the EDM data source after confirming the certificate on the device's edit page
   (*Check and confirm certificate*) and storing an EDM login there.
+- **MikroTik switch with SwOS:** kind "MikroTik SwOS (through proxy)", address `http://<ip>`
+  (SwOS has no HTTPS). Enter the web login (`admin` and its password) under *Credentials* when
+  adding the device, or later on its edit page – ERS-Proxy logs in for the browser. For the port dashboard choose the source "SwOS
+  (web)" (VLANs, duplex, LAGs) or SNMP (ports and traffic only).
 - **Any other device:** kind "Link", the full URL of its web interface. It opens directly; if
   the device forbids being embedded, ERS-Proxy opens it in a new browser tab.

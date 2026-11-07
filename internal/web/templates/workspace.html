@@ -36,8 +36,7 @@
         <h2>{{.T "ws.welcome"}}</h2>
         {{if .Data.Count}}<p class="muted">{{.T "ws.hint"}}</p>
         {{else if .Can "admin"}}<p class="muted">{{.T "ws.first_device"}}</p>
-          <p><a class="button primary" href="/admin/devices/new">{{.T "devices.new"}}</a>
-             <a class="button" href="/admin/devices/new?kind=link">{{.T "devices.new_link"}}</a></p>
+          <p><a class="button primary" href="/admin/devices/new">{{.T "devices.new"}}</a></p>
         {{else}}<p class="muted">{{.T "ws.ask_admin"}}</p>{{end}}
       </div>
     </div>

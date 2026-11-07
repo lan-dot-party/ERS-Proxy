@@ -8,8 +8,8 @@ done on its own day.
 ## Safety rules (read first)
 
 - **Read-only.** Never click *Apply*, *Save*, *Reset* or *Delete* in EDM, never run
-  configuration commands on the switch, never send SNMP SETs (ERS-Proxy cannot). Navigate and
-  look only.
+  configuration commands on the switch, never send SNMP SETs. Navigate and look only. The only
+  exception is section 9 (configuration changes), on a switch approved for writes.
 - Use a **read-only account** for EDM (e.g. the `RO` user) and a **read-only SNMP community or
   SNMPv3 read-only user**. Only where a step needs more, it says so.
 - Production switches: agree on a time window with the maintainer before starting.
@@ -167,6 +167,47 @@ Needs the stored EDM login of section 4 (read-only account).
 2. HTTPS device: if the switch certificate is regenerated (only if planned anyway), the dot turns
    orange ("certificate changed") and opening the device is blocked until an admin confirms.
 
+## 9. Configuration changes (phase 8, approved test VSP only)
+
+**The read-only rule above does not apply to this section, and only this section.** Only on a
+switch the maintainer has approved for writes, only on unused ports and test VLANs, never on
+an uplink or the management VLAN. Run it from an isolated test instance with
+`configure.enabled: true`. Log out of EDM after each run (the VSP allows few web sessions).
+Afterwards check that the switch is as before and reset it if not.
+
+Step 8.1 – recording (before the writers are trusted). **Done 2026-11-06 on a VSP 8404 with
+VOSS 8.10.1.0** (recipes in [switch-configuration.md](switch-configuration.md)); repeat on VOSS 7.1
+and ERS when those are supported:
+
+1. Open the switch's EDM through the proxy with debug logging, or in Chromium with the
+   DevTools network tab. For each action, do it once by hand in EDM and record the
+   `setFormMibs.jsp` request (varNames, varValues, varCount) and the answer:
+   set a port's PVID; add a port to a VLAN and remove it again (PortSet); change a port's
+   tagging; create a VLAN (all columns EDM sends, especially STG/MSTI) and delete it; rename a
+   VLAN; set a port's name; disable and enable an unused port; switch PoE off and on (if the
+   model has PoE); "Save configuration". Also provoke one error (e.g. an invalid VLAN ID) and
+   record the error answer.
+2. Compare with "Write recipes" in [switch-configuration.md](switch-configuration.md) and fill
+   in what was open: the success answer, the tagging values, the order VOSS accepts, the
+   columns for a new VLAN, the save action, PoE over EDM.
+
+Step 8.11 – ERS-Proxy writing, for the EDM channel and again for the SNMP channel (SNMP needs a
+write community or SNMPv3 user on the switch). First run: EDM channel, 2026-11-06 (result rows C.1–C.10
+at the end of this file).
+
+| # | Action | Expected |
+|---|---|---|
+| C.1 | Port VLAN move (access, unused port), preview | steps and warnings shown; nothing written yet (check in EDM) |
+| C.2 | Apply, then Confirm | read-back ok, banner, change kept; saved if the save action is known |
+| C.3 | Apply, then Revert | port as before (check in EDM and on the dashboard) |
+| C.4 | Apply, do nothing | reverted at the deadline; audit entry by `system` |
+| C.5 | Apply, restart ERS-Proxy while pending, wait for the deadline | reverted after the restart |
+| C.6 | Create a test VLAN, rename it, delete it | each step read back; delete restores members on revert |
+| C.7 | Port name, port disable/enable (unused port) | as C.2/C.3 |
+| C.8 | PoE off/on (PoE model, nothing important connected) | as C.2/C.3 |
+| C.9 | Change the switch in EDM between preview and apply | "the switch changed since the preview", nothing written |
+| C.10 | Invalid value (e.g. an alias the switch rejects) | apply fails, already written steps reverted, state `failed` |
+
 ## After the tests
 
 - Update [compatibility.md](compatibility.md): model, firmware, transport, result, how verified.
@@ -203,4 +244,20 @@ Needs the stored EDM login of section 4 (read-only account).
 | V.4 | VSP: EDM data source | ok after fixes | VOSS login variant (`encode_vrf`, fixed); `ifName`, `ifType`, `ifHighSpeed` unknown to VOSS's EDM (`Oid_Conversion_Fail` truncated the table, fixed); same ports, VLANs, tagging, LLDP and unit as SNMP. MLTs and channelized ports not configured on the test switch |
 | V.5 | VSP: device kind `vsp-edm` (EDM through the proxy, embedded) | ok after fixes | 2026-11-04, Chromium 156: auto-login and manual login, navigation tree, Edit › Chassis and VLAN › VLANs, write test (`sysLocation` set, read back, reverted), EDM's *Log out* (stays below `/d/{token}/`), no console errors. Fixed on the way: keep-alive also for proxied VOSS devices; the login failed with "Authentication Failed" because the sandbox has no `localStorage` and the page's fallback cookie went to the switch (shim now provides Web Storage) |
 | V.6 | VSP: "Open in EDM" for a port | ok | 2026-11-04: dashboard link `/?open=<id>&port=<ifIndex>` opens "Port 1/6 General", a second link "Port 1/48 General" in the same (reused) proxy session |
+| M.1 | MikroTik CRS305-1G-4S+ (SwOS 2.18): web server, SNMP | ok | 2026-11-04: HTTP only; `/index.html` without login, every `.b` file and POST with HTTP Digest (MD5, `qop=auth`, nonce stable across requests); SNMP v2c: system group, IF-MIB, BRIDGE-MIB, MIKROTIK-MIB serial/firmware/SFP table, no Q-BRIDGE, EtherLike or LLDP |
+| M.2 | SwOS: device kind `swos` (web interface through the proxy) | ok | 2026-11-04, read-only, Chromium 156 and Firefox ESR 153: embedded in the workspace with the stored login, all 17 tabs listed, link table loaded, opaque origin, parent not reachable, every request below `/d/{token}/`, no console errors. Nothing applied on the switch |
+| M.3 | SwOS: SNMP dashboard data | ok | driver `swos` detected by `sysObjectID`; 5 ports with names, speed and traffic; note that VLANs need the SwOS source |
+| M.4 | SwOS: SwOS data source | ok | same ports, speed and rates as SNMP, plus duplex, 13 VLANs with names, PVID and trunk tagging; port labels as in SwOS (`ETH/BOOT`, `SFP1`–`SFP4`). LAGs not configured on the test switch; tagging of hybrid ports ("VLAN Receive: any") derived, not seen on hardware |
 | V.7 | VSP 8404 (VOSS 8.10.1.0): SNMP, TLS, EDM login | partly | 2026-11-04: TLS 1.2 ECDHE/AES-GCM (modern profile); SNMP v2c dashboard data ok; EDM login page sets no `auth` cookie before the login (auto-login stopped with "did not set the auth cookie", fixed); the factory default login was then rejected ("Authentication Failed"); with another stored login: auto-login, device view, "Open in EDM" for ports 1/15 and 1/1 (the port dialog needed retries: VOSS 8 ignores a double-click until it has loaded the port data – fixed) |
+| 8.1 | VSP 8404 (VOSS 8.10.1.0): recording of EDM writes | ok | 2026-11-06: EDM over HTTPS; request format, success and error answers, empty text (`0x00:`), PortSet, tagging, hybrid ports (`rcVlanPortUntagDefaultVlan`), order for VLAN changes and the save action (`rcSysActionL1` = 7) recorded from EDM's JavaScript and by-hand `setVariables`, read back over SNMP. PoE: VOSS's EDM has no PoE objects to write. Details in `switch-configuration.md` |
+| C.1 (EDM) | VSP 8404: port VLAN preview | ok | 2026-11-06, isolated test instance with `configure.enabled: true`, `confirm_timeout` 1m, unused port 2/1 (no link), test VLAN 999: steps shown (enable tagging, add VLAN members, set PVIDs, untag the default VLAN) and the `mgmt_unknown` warning; nothing written (checked over SNMP) |
+| C.2 (EDM) | Apply, then Confirm | ok | done in Chromium through the UI; read-back ok, state `confirmed`, configuration saved (`rcSysLastRunTimeConfigSave` changed) |
+| C.3 (EDM) | Apply, then Revert | ok | port exactly as before |
+| C.4 (EDM) | Apply, do nothing | ok | reverted at the deadline (about 1 minute); audit entry by `system` |
+| C.5 (EDM) | Restart of ERS-Proxy while pending | ok | reverted after the restart, at the deadline |
+| C.6 (EDM) | Create, rename, delete a test VLAN | ok | create confirmed and saved, rename reverted, delete confirmed. Delete with members not tried on hardware (the VLAN had none; unit tests cover it) |
+| C.7 (EDM) | Port name, port disable | ok | name set and reverted (back to an empty name via `0x00:`); port disabled and reverted |
+| C.8 (EDM) | PoE | n/a | no PoE on the VSP 8404; VOSS's EDM cannot write PoE (refused as `no_poe`) |
+| C.9 (EDM) | Switch changed between preview and apply | ok | refused with "the switch changed since the preview"; nothing written |
+| C.10 (EDM) | Invalid value | ok | create VLAN 4090 (reserved on VOSS): the switch rejected it (`snmpErrorStatus` 12801), state `failed`, nothing left on the switch |
+| C.x | Open: SNMP channel (needs write credentials), VOSS 7.1 (VSP 4850GTS), ERS (not supported by the planner yet) | – | finding during the run: a hybrid port showed as trunk on the dashboard until the VOSS driver read `rcVlanPortUntagDefaultVlan` (fixed) |

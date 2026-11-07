@@ -455,3 +455,72 @@ func TestSNMPOnCreateAndVersionSwitch(t *testing.T) {
 		t.Fatalf("main form changed the SNMP version or credentials: %s", d.SNMPVersion)
 	}
 }
+
+// TestCreateDeviceWithLogin: the switch login can be stored when a device is
+// added, like SNMP access.
+func TestCreateDeviceWithLogin(t *testing.T) {
+	h := newHarness(t)
+	h.user("admin", store.RoleAdmin)
+	h.login("admin")
+	origin := map[string]string{"Origin": h.srv.URL}
+	ctx := context.Background()
+	form := func(name, kind string, extra map[string]string) url.Values {
+		v := url.Values{"_csrf": {h.csrf}, "name": {name}, "kind": {kind}, "url": {"http://192.0.2.30"},
+			"monitor_source": {"none"}, "monitor_interval": {"60"}, "snmp_port": {"161"}}
+		for k, x := range extra {
+			v.Set(k, x)
+		}
+		return v
+	}
+	byName := func(name string) *store.Device {
+		ds, _ := h.db.ListDevices(ctx)
+		for _, d := range ds {
+			if d.Name == name {
+				return d
+			}
+		}
+		return nil
+	}
+	if _, body := h.get("/admin/devices/new"); !strings.Contains(body, `name="login_username"`) ||
+		!strings.Contains(body, `name="login_password"`) || strings.Count(body, `name="confirm_password"`) != 1 {
+		t.Fatal("new-device form without login fields or with two password confirmations")
+	}
+	if _, body := h.get("/admin/devices"); strings.Contains(body, "kind=link") {
+		t.Fatal("device list still has a second add button")
+	}
+	// Login without the admin's password, or only half a login: nothing is created.
+	if r := h.post("/admin/devices", form("a", "swos", map[string]string{"login_username": "admin", "login_password": "pw"}), origin); r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("login without password: %d", r.StatusCode)
+	}
+	if r := h.post("/admin/devices", form("a", "swos", map[string]string{"login_username": "admin",
+		"confirm_password": "correct horse battery"}), origin); r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("half a login: %d", r.StatusCode)
+	}
+	if byName("a") != nil {
+		t.Fatal("rejected form created a device")
+	}
+	// Valid: stored encrypted and bound to the device.
+	r := h.post("/admin/devices", form("crs", "swos", map[string]string{"login_username": "admin", "login_password": "sw-pass-1",
+		"confirm_password": "correct horse battery"}), origin)
+	if r.StatusCode != http.StatusSeeOther {
+		t.Fatalf("create with login: %d", r.StatusCode)
+	}
+	d := byName("crs")
+	if d == nil || !d.HasCredentials() || bytes.Contains(d.Credentials, []byte("sw-pass-1")) {
+		t.Fatalf("device %+v", d)
+	}
+	if c, err := devices.DecryptCredentials(h.ui.Key, d); err != nil || c.Username != "admin" || c.Password != "sw-pass-1" {
+		t.Fatalf("stored login %+v %v", c, err)
+	}
+	// ERS: storing the login turns auto-login on, as on the edit page.
+	h.post("/admin/devices", form("ers", "ers-edm", map[string]string{"login_username": "RW", "login_password": "secure",
+		"confirm_password": "correct horse battery"}), origin)
+	if e := byName("ers"); e == nil || !e.HasCredentials() || !e.AutoLogin {
+		t.Fatalf("ers device %+v", e)
+	}
+	// Links have no login: the fields are ignored.
+	h.post("/admin/devices", form("fw", "link", map[string]string{"login_username": "x", "login_password": "y"}), origin)
+	if l := byName("fw"); l == nil || l.HasCredentials() {
+		t.Fatalf("link %+v", l)
+	}
+}

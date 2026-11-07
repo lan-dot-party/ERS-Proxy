@@ -37,6 +37,9 @@ type Options struct {
 	// web server of VSP switches (VOSS) resets a connection it is asked to
 	// close right after the response headers, which loses the body.
 	KeepAlive bool
+	// Login, if set, answers HTTP Digest challenges of the device (MikroTik
+	// SwOS) on the server; the browser never sees them.
+	Login *Login
 }
 
 // Client talks to one device.
@@ -91,6 +94,9 @@ func New(opts Options) (*Client, error) {
 		next = keepAliveTransport{raw}
 	}
 	c.Transport = &retryTransport{next: next, delays: retryDelays, fast: fastDrop}
+	if opts.Login != nil {
+		c.Transport = WithDigest(c.Transport, *opts.Login)
+	}
 	return c, nil
 }
 

@@ -3,6 +3,7 @@ package drivers
 import (
 	"context"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -449,5 +450,92 @@ func TestVOSSOverEDMWithoutIfTypeAndName(t *testing.T) {
 	}
 	if len(snap.Units) != 1 || snap.Units[0].Number != 1 || snap.Units[0].Model != "VSP-4850GTS" {
 		t.Errorf("units %+v", snap.Units)
+	}
+}
+
+func TestSwOSAgainstSimulator(t *testing.T) {
+	s, d := collect(t, "swos")
+	if d.Name() != "swos" {
+		t.Fatalf("detected %s", d.Name())
+	}
+	if len(s.Units) != 1 || s.Units[0].Model != "CRS305-1G-4S+" || s.Units[0].Serial != "SYNTH0002" || s.Units[0].Firmware != "2.18" {
+		t.Fatalf("units %+v", s.Units)
+	}
+	p2 := port(t, s, 2)
+	if p2.Unit != 1 || p2.Number != 2 || p2.Name != "server-a" || !p2.Up() || p2.Speed != 10_000_000_000 || !p2.HasHC {
+		t.Errorf("port 2: %+v", p2)
+	}
+	if p3 := port(t, s, 3); p3.Up() || p3.Speed != 0 || p3.Number != 3 {
+		t.Errorf("port 3: %+v", p3)
+	}
+	if len(s.VLANs) != 0 || !strings.Contains(strings.Join(s.Notes, " "), "SwOS (web)") {
+		t.Errorf("VLANs %v, notes %v", s.VLANs, s.Notes)
+	}
+}
+
+func TestSwOSMatch(t *testing.T) {
+	d := SwOS{}
+	if d.Match(monitor.System{ObjectID: "1.3.6.1.4.1.14988.2"}) != 100 ||
+		d.Match(monitor.System{ObjectID: "1.3.6.1.4.1.14988.1", Descr: "RouterOS CRS326"}) != 0 ||
+		d.Match(monitor.System{Descr: "CSS610-8G-2S+ SwOS v2.18"}) != 90 {
+		t.Fatal("match")
+	}
+}
+
+func TestGrandstreamAgainstSimulator(t *testing.T) {
+	s, d := collect(t, "grandstream")
+	if d.Name() != "grandstream" {
+		t.Fatalf("detected %s", d.Name())
+	}
+	if len(s.Units) != 1 || s.Units[0].Model != "GWN7721" || s.Units[0].Firmware != "1.0.7.1" {
+		t.Fatalf("units %+v", s.Units)
+	}
+	p1 := port(t, s, 1)
+	if p1.Unit != 1 || p1.Number != 1 || p1.Name != "2.5GE1" || p1.Alias != "office" || !p1.Up() ||
+		p1.Speed != 2_500_000_000 || !p1.HasHC || p1.PVID != 1 || p1.Mode != "access" {
+		t.Errorf("port 1: %+v", p1)
+	}
+	if p2 := port(t, s, 2); p2.PVID != 100 || p2.Speed != 1_000_000_000 {
+		t.Errorf("port 2: %+v", p2)
+	}
+	if p3 := port(t, s, 3); p3.Admin != "down" || p3.Up() {
+		t.Errorf("port 3: %+v", p3)
+	}
+	if p9 := port(t, s, 9); p9.Number != 9 || p9.Name != "SFP+9" || p9.Speed != 10_000_000_000 {
+		t.Errorf("port 9: %+v", p9)
+	}
+	if len(s.VLANs) != 0 || !strings.Contains(strings.Join(s.Notes, " "), "GWN (web + SNMP)") {
+		t.Errorf("VLANs %v, notes %v", s.VLANs, s.Notes)
+	}
+}
+
+func TestGrandstreamMatch(t *testing.T) {
+	for _, c := range []struct {
+		sys  monitor.System
+		want int
+	}{
+		{monitor.System{ObjectID: "1.3.6.1.4.1.42397", Descr: "GWN7721"}, 100},
+		{monitor.System{ObjectID: "1.3.6.1.4.1.42397.1.3", Descr: "x"}, 100},
+		{monitor.System{ObjectID: "1.3.6.1.4.1.423970", Descr: "x"}, 0},
+		{monitor.System{ObjectID: "1.3.6.1.4.1.8072.3.2.10", Descr: "GWN7813P"}, 90},
+		{monitor.System{ObjectID: "1.3.6.1.4.1.8072.3.2.10", Descr: "Linux"}, 0},
+	} {
+		if got := (Grandstream{}).Match(c.sys); got != c.want {
+			t.Errorf("Match(%+v) = %d, want %d", c.sys, got, c.want)
+		}
+	}
+}
+
+func TestGrandstreamPortNames(t *testing.T) {
+	for name, want := range map[string]int{"2.5GE1": 1, "GE12": 12, "SFP+10": 10, "SFP3": 3, "10GE2": 2, "XGE4": 4} {
+		m := gwnPort.FindStringSubmatch(name)
+		if m == nil || m[1] != strconv.Itoa(want) {
+			t.Errorf("%s: %v, want %d", name, m, want)
+		}
+	}
+	for _, name := range []string{"VLAN1", "LAG1", "CPU", "GE"} {
+		if gwnPort.MatchString(name) {
+			t.Errorf("%s matched", name)
+		}
 	}
 }

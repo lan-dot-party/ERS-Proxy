@@ -63,6 +63,9 @@ type Server struct {
 	Monitor MonitorView
 	// History provides stored port traffic; optional.
 	History HistoryView
+	// Configure changes switch settings; nil unless configure.enabled is set
+	// in config.yaml (see configure.go).
+	Configure Configurator
 	// Diagnostics renders extra rows on the diagnostics page; optional.
 	Diagnostics func(d *store.Device) []DiagRow
 	// OnDeviceChange is called after a device was changed or deleted (the
@@ -82,7 +85,7 @@ type DiagRow struct {
 
 var pageFiles = []string{
 	"login", "workspace", "account", "error", "trust", "dashboard",
-	"devices", "device_form", "groups", "users", "audit", "diagnostics", "switch", "port",
+	"devices", "device_form", "groups", "users", "audit", "diagnostics", "switch", "port", "config_preview",
 }
 
 // New parses all templates.
@@ -100,13 +103,15 @@ func New(a *app.App) (*Server, error) {
 }
 
 var funcs = template.FuncMap{
-	"themes":         func() []string { return store.Themes },
-	"hasPrefix":      strings.HasPrefix,
-	"openModes":      func() []string { return []string{config.OpenEmbedded, config.OpenTab, config.OpenWindow} },
-	"tlsModes":       func() []string { return []string{store.TLSAuto, store.TLSModern, store.TLSLegacy} },
-	"monitorSources": func() []string { return []string{store.MonitorNone, store.MonitorSNMP, store.MonitorEDM} },
+	"themes":    func() []string { return store.Themes },
+	"hasPrefix": strings.HasPrefix,
+	"openModes": func() []string { return []string{config.OpenEmbedded, config.OpenTab, config.OpenWindow} },
+	"tlsModes":  func() []string { return []string{store.TLSAuto, store.TLSModern, store.TLSLegacy} },
+	"monitorSources": func() []string {
+		return []string{store.MonitorNone, store.MonitorSNMP, store.MonitorEDM, store.MonitorSwOS, store.MonitorGWN}
+	},
 	"monitorDrivers": func() []string {
-		return []string{store.DriverAuto, store.DriverGeneric, store.DriverERS, store.DriverCisco, store.DriverTPLink, store.DriverVOSS}
+		return []string{store.DriverAuto, store.DriverGeneric, store.DriverERS, store.DriverCisco, store.DriverTPLink, store.DriverVOSS, store.DriverSwOS, store.DriverGWN}
 	},
 	"snmpVersions":   func() []string { return snmp.Versions },
 	"securityLevels": func() []string { return snmp.SecurityLevels },
@@ -170,6 +175,14 @@ func (s *Server) Routes() http.Handler {
 			r.Post("/admin/users/{id}/delete", s.userDelete)
 			r.Get("/admin/audit", s.audit)
 			r.Get("/admin/diagnostics", s.diagnostics)
+			if s.Configure != nil { // without it none of these exists (404)
+				r.Post("/admin/devices/{id}/snmp-write", s.deviceSNMPWrite)
+				r.Post("/dashboard/{id}/configure/preview", s.configPreview)
+				r.Get("/dashboard/{id}/configure/preview/{pid}", s.configPreviewPage)
+				r.Post("/dashboard/{id}/configure/apply", s.configApply)
+				r.Post("/dashboard/{id}/configure/{change}/confirm", s.configConfirm)
+				r.Post("/dashboard/{id}/configure/{change}/revert", s.configRevert)
+			}
 		})
 	})
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {

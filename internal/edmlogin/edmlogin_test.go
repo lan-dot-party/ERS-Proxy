@@ -129,9 +129,15 @@ func TestLoginVOSS(t *testing.T) {
 		}
 	})
 	t.Run("other status", func(t *testing.T) {
-		srv, _ := vossServer(t, 500, "secret")
+		srv, _ := vossServer(t, 403, "secret")
 		if err := Login(ctx, http.DefaultTransport, srv.URL, NewJar(), "admin", "secret"); !errors.Is(err, ErrRejected) {
 			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("server error", func(t *testing.T) {
+		srv, _ := vossServer(t, 500, "secret")
+		if err := Login(ctx, http.DefaultTransport, srv.URL, NewJar(), "admin", "secret"); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("err = %v, want ErrUnavailable (not a rejected password)", err)
 		}
 	})
 	t.Run("VOSS 8 without nonce cookie", func(t *testing.T) {
@@ -175,5 +181,28 @@ func TestAuthFailed(t *testing.T) {
 	}
 	if authFailed([]byte("<html><title>Embedded Element Manager</title></html>")) || authFailed(nil) {
 		t.Fatal("index page taken as failure")
+	}
+}
+
+// A busy switch (VOSS: "503 Server Too Busy" when all web sessions are taken)
+// must not count as a rejected password: callers stop trying after
+// ErrRejected, and the device's EDM session would never log in again.
+func TestLoginBusyIsNotRejected(t *testing.T) {
+	for _, step := range []string{"page", "submit"} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet && step == "submit" {
+				http.SetCookie(w, &http.Cookie{Name: "auth", Value: "n1"})
+				_, _ = io.WriteString(w, vossPage)
+				return
+			}
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, "Server Too Busy")
+		}))
+		jar := NewJar()
+		err := Login(context.Background(), srv.Client().Transport, srv.URL, jar, "rwa", "secret")
+		srv.Close()
+		if !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrRejected) {
+			t.Errorf("%s: err = %v, want ErrUnavailable and not ErrRejected", step, err)
+		}
 	}
 }

@@ -1,13 +1,15 @@
-// Package edmproxy serves the web interface (EDM) of ERS switches below
-// /d/{token}/: it forwards requests to the switch, keeps the switch's cookies
-// on the server, patches EDM for modern browsers and isolates the content in
-// a browser sandbox. See docs/security.md and docs/architecture.md.
+// Package edmproxy serves the web interface of proxied switches (EDM of ERS
+// and VSP switches, MikroTik SwOS) below /d/{token}/: it forwards requests to
+// the switch, keeps the switch's cookies and logins on the server, patches
+// EDM for modern browsers and isolates the content in a browser sandbox. See
+// docs/security.md and docs/architecture.md.
 package edmproxy
 
 import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -93,6 +95,13 @@ func (p *Proxy) Open(w http.ResponseWriter, r *http.Request, d *store.Device) {
 		http.Error(w, "login required", http.StatusUnauthorized)
 		return
 	}
+	if d.SwOS() && !d.HasCredentials() {
+		// The proxy logs in for the browser (HTTP Digest); without a stored
+		// login every data request of SwOS's page would fail.
+		isolationHeaders(w.Header(), true)
+		p.message(w, r, http.StatusConflict, "No web login is stored for this SwOS switch. An admin can store it in the device settings.")
+		return
+	}
 	now := time.Now()
 	ps := p.reg.reuse(sess.ID, d.ID, now)
 	if ps != nil {
@@ -100,7 +109,7 @@ func (p *Proxy) Open(w http.ResponseWriter, r *http.Request, d *store.Device) {
 		p.log.Debug("device opened (session reused)", "device", d.Name, "user", u.Username)
 	} else {
 		ps = p.reg.create(sess.ID, u, d)
-		if d.AutoLogin && d.HasCredentials() {
+		if d.AutoLogin && d.HasCredentials() && !d.SwOS() {
 			p.tryAutoLogin(r.Context(), ps)
 		}
 		p.log.Debug("device opened", "device", d.Name, "user", u.Username)
@@ -205,13 +214,27 @@ func (p *Proxy) Client(d *store.Device) (*upstream.Client, error) { return p.cli
 
 func (p *Proxy) client(d *store.Device) (*upstream.Client, error) {
 	sig := d.Kind + "|" + d.URL + "|" + d.TLSMode + "|" + d.TLSPin
+	if d.SwOS() && d.HasCredentials() {
+		h := sha256.Sum256(d.Credentials)
+		sig += "|" + fmt.Sprintf("%x", h[:8])
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if e := p.clients[d.ID]; e != nil && e.sig == sig {
 		return e.c, nil
 	}
+	var login *upstream.Login
+	if d.SwOS() && d.HasCredentials() {
+		cred, err := devices.DecryptCredentials(p.app.Key, d)
+		if err != nil {
+			return nil, fmt.Errorf("open the stored web login: %w", err)
+		}
+		login = &upstream.Login{Username: cred.Username, Password: cred.Password}
+	}
 	id := d.ID
 	c, err := upstream.New(upstream.Options{
+		// SwOS: the server answers the switch's HTTP Digest challenge.
+		Login:    login,
 		BaseURL:  d.URL,
 		TLSMode:  d.TLSMode,
 		Pin:      d.TLSPin,
@@ -293,8 +316,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ps.validated.Store(now.UnixNano())
 	}
 	ps.lastUsed.Store(now.UnixNano())
-	if sub == "/logout.html" || sub == "/logout_apls.html" {
-		ps.loggedOut.Store(true) // EDM's logout (ERS and VOSS): do not reuse
+	if sub == "/logout.html" || sub == "/logout_apls.html" || (ps.device.SwOS() && sub == "/logout") {
+		ps.loggedOut.Store(true) // the switch's logout (ERS, VOSS, SwOS): do not reuse
 	}
 	sandbox := ps.device.Isolation != store.IsolationOff
 	isolationHeaders(w.Header(), sandbox)
@@ -315,7 +338,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case sub == shimPath:
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		_, _ = io.WriteString(w, shimJS(ps.jar.script(), ps.storage.script(), base))
+		_, _ = io.WriteString(w, shimJS(ps.jar.script(), ps.storage.script(), base, ps.device.SwOS()))
 		return
 	case sub == cookiePath && r.Method == http.MethodPost:
 		data, err := io.ReadAll(io.LimitReader(r.Body, 4096))
@@ -377,7 +400,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			pr.Out.URL = &u
 			pr.Out.Host = target.Host
 			h := pr.Out.Header
-			for _, k := range []string{"Cookie", "Origin", "Referer", "Accept-Encoding", "Forwarded", "X-Forwarded-For",
+			// The browser's own credentials never reach the switch; logins
+			// are the proxy's job (cookie jar, stored login).
+			for _, k := range []string{"Cookie", "Authorization", "Origin", "Referer", "Accept-Encoding", "Forwarded", "X-Forwarded-For",
 				"X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-Ip", "Sec-Fetch-Site", "Sec-Fetch-Mode", "Sec-Fetch-Dest",
 				"Sec-Fetch-User", "Upgrade-Insecure-Requests", "Priority",
 				// The switch answers every request carrying "Cache-Control: max-age=0"
@@ -436,6 +461,14 @@ func (p *Proxy) modifyResponse(resp *http.Response, in *http.Request, ps *proxyS
 	ps.jar.store(resp)
 	h := resp.Header
 	h.Del("Set-Cookie")
+	// No login dialog of the browser for the switch: logins are stored on the
+	// server (see client).
+	h.Del("Www-Authenticate")
+	if resp.StatusCode == http.StatusUnauthorized && ps.device.SwOS() {
+		p.withDiag(ps.device.ID, func(d *Diag) {
+			d.LastError, d.LastErrorAt = "the switch rejected the stored web login", time.Now()
+		})
+	}
 	if loc := h.Get("Location"); loc != "" {
 		h.Set("Location", rewriteLocation(loc, c.Base(), base))
 	}

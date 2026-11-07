@@ -36,8 +36,16 @@ const storagePath = "/__ersproxy/storage"
 //     (window.open returns null), so the shim returns a stand-in, collects
 //     what is written and opens the window with it as a Blob URL. The window
 //     stays sandboxed.
-func shimJS(cookies, storage, base string) string {
+//   - Absolute request paths (rebase, SwOS only): SwOS's page loads its data
+//     with XMLHttpRequest from absolute paths ("/link.b"), which would leave
+//     the proxy path. The shim maps such paths below /d/{token}/.
+func shimJS(cookies, storage, base string, rebase bool) string {
 	c, _ := json.Marshal(cookies)
+	bp, _ := json.Marshal(base)
+	rb := "false"
+	if rebase {
+		rb = "true"
+	}
 	b, _ := json.Marshal(base + strings.TrimPrefix(cookiePath, "/"))
 	sp, _ := json.Marshal(base + strings.TrimPrefix(storagePath, "/"))
 	if !json.Valid([]byte(storage)) {
@@ -47,6 +55,19 @@ func shimJS(cookies, storage, base string) string {
   "use strict";
   var jar = ` + string(c) + `;
   var post = ` + string(b) + `;
+  var base = ` + string(bp) + `;
+  if (` + rb + ` && window.XMLHttpRequest) {
+    // "/x" -> base + "x"; protocol-relative ("//host") and absolute URLs and
+    // paths already below base stay as they are.
+    var realXHROpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url) {
+      var args = Array.prototype.slice.call(arguments);
+      if (typeof url === "string" && url.charAt(0) === "/" && url.charAt(1) !== "/" && url.indexOf(base) !== 0) {
+        args[1] = base + url.slice(1);
+      }
+      return realXHROpen.apply(this, args);
+    };
+  }
   function parse(s) {
     var out = {};
     if (!s) return out;

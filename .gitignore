@@ -18,3 +18,5 @@ coverage.out
 
 # Local scratch files (e.g. downloaded CI logs, screenshots)
 /temp/
+logs_112998529994.zip
+tools/e2e/__pycache__/edm_e2e.cpython-313.pyc

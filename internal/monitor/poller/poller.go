@@ -1,5 +1,5 @@
-// Package poller runs one loop per monitored device: open a reader (SNMP or
-// EDM), let the driver collect a snapshot, compute rates and events against
+// Package poller runs one loop per monitored device: open a reader (SNMP,
+// EDM, SwOS or GWN), let the driver collect a snapshot, compute rates and events against
 // the previous snapshot, and hand everything to the history sink.
 package poller
 
@@ -56,6 +56,10 @@ type Poller struct {
 	Sink     Sink
 	// OpenEDM opens the EDM reader for source "edm" (nil: not available).
 	OpenEDM OpenFunc
+	// OpenSwOS opens the SwOS web reader for source "swos" (nil: not available).
+	OpenSwOS OpenFunc
+	// OpenGWN opens the Grandstream GWN web reader for source "gwn" (nil: not available).
+	OpenGWN OpenFunc
 	// Timeout of one poll (SNMP requests are retried inside).
 	Timeout time.Duration
 
@@ -63,17 +67,62 @@ type Poller struct {
 	loops  map[int64]*loop
 	status map[int64]*Status
 	wake   chan struct{}
+	// gates holds one token per device: a poll and a Hold (a configuration
+	// change in progress) never run at the same time.
+	gates map[int64]chan struct{}
 }
 
 type loop struct {
 	sig    string
 	cancel context.CancelFunc
+	now    chan struct{}
 }
 
 // New creates a poller.
 func New(db *store.DB, key *secret.Key, reg *monitor.Registry, log *slog.Logger) *Poller {
 	return &Poller{DB: db, Key: key, Registry: reg, Log: log.With("component", "monitor"), Timeout: 2 * time.Minute,
-		loops: map[int64]*loop{}, status: map[int64]*Status{}, wake: make(chan struct{}, 1)}
+		loops: map[int64]*loop{}, status: map[int64]*Status{}, wake: make(chan struct{}, 1),
+		gates: map[int64]chan struct{}{}}
+}
+
+func (p *Poller) gate(id int64) chan struct{} {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	g := p.gates[id]
+	if g == nil {
+		g = make(chan struct{}, 1)
+		p.gates[id] = g
+	}
+	return g
+}
+
+// Hold pauses polling of a device until release is called; it waits for a
+// poll in progress to end. A configuration change holds the device while it
+// writes and reads back, so that no half-applied state ends up in a snapshot
+// or in the history.
+func (p *Poller) Hold(ctx context.Context, id int64) (release func(), err error) {
+	g := p.gate(id)
+	select {
+	case g <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	var once sync.Once
+	return func() { once.Do(func() { <-g }) }, nil
+}
+
+// PollNow polls a device as soon as possible (after a configuration change).
+func (p *Poller) PollNow(id int64) {
+	p.mu.Lock()
+	l := p.loops[id]
+	p.mu.Unlock()
+	if l == nil {
+		return
+	}
+	select {
+	case l.now <- struct{}{}:
+	default:
+	}
 }
 
 // Trigger re-reads the device list soon (after a device changed).
@@ -145,12 +194,13 @@ func (p *Poller) sync(ctx context.Context) {
 			continue
 		}
 		lctx, cancel := context.WithCancel(ctx)
-		p.loops[id] = &loop{sig: signature(d), cancel: cancel}
-		go p.run(lctx, d)
+		l := &loop{sig: signature(d), cancel: cancel, now: make(chan struct{}, 1)}
+		p.loops[id] = l
+		go p.run(lctx, d, l.now)
 	}
 }
 
-func (p *Poller) run(ctx context.Context, d *store.Device) {
+func (p *Poller) run(ctx context.Context, d *store.Device, now <-chan struct{}) {
 	interval := time.Duration(d.MonitorInterval) * time.Second
 	if interval < 30*time.Second {
 		interval = 60 * time.Second
@@ -164,9 +214,17 @@ func (p *Poller) run(ctx context.Context, d *store.Device) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		case <-now:
+		}
+		g := p.gate(d.ID)
+		select {
+		case g <- struct{}{}:
+		case <-ctx.Done():
+			return
 		}
 		start := time.Now()
 		snap, used, err := p.pollOnce(ctx, d, drv)
+		<-g
 		if ctx.Err() != nil {
 			return
 		}
@@ -226,6 +284,18 @@ func (p *Poller) pollOnce(ctx context.Context, d *store.Device, drv monitor.Driv
 		return nil, nil, err
 	}
 	defer closeFn()
+	return p.collect(ctx, d, r, drv)
+}
+
+// CollectNow collects a snapshot of a device through r (the channel of a
+// configuration change), with the device's driver.
+func (p *Poller) CollectNow(ctx context.Context, d *store.Device, r monitor.Reader) (*monitor.Snapshot, error) {
+	snap, _, err := p.collect(ctx, d, r, nil)
+	return snap, err
+}
+
+func (p *Poller) collect(ctx context.Context, d *store.Device, r monitor.Reader, drv monitor.Driver) (*monitor.Snapshot, monitor.Driver, error) {
+	var err error
 	if drv == nil {
 		if d.MonitorDriver != "" && d.MonitorDriver != store.DriverAuto {
 			drv, err = p.Registry.Get(d.MonitorDriver)
@@ -257,20 +327,37 @@ func (p *Poller) open(ctx context.Context, d *store.Device) (monitor.Reader, fun
 		if err != nil {
 			return nil, nil, err
 		}
-		host, _ := devices.HostPort(d.URL)
-		r, err := snmpsrc.Open(ctx, snmp.Target{Host: host, Port: d.SNMPPort, Version: d.SNMPVersion, Creds: creds,
-			Timeout: 5 * time.Second, Retries: 1})
-		if err != nil {
-			return nil, nil, err
-		}
-		return r, r.Close, nil
+		return OpenSNMP(ctx, d, creds)
 	case store.MonitorEDM:
 		if p.OpenEDM == nil {
 			return nil, nil, errors.New("the EDM data source is not available")
 		}
 		return p.OpenEDM(ctx, d)
+	case store.MonitorSwOS:
+		if p.OpenSwOS == nil {
+			return nil, nil, errors.New("the SwOS data source is not available")
+		}
+		return p.OpenSwOS(ctx, d)
+	case store.MonitorGWN:
+		if p.OpenGWN == nil {
+			return nil, nil, errors.New("the GWN data source is not available")
+		}
+		return p.OpenGWN(ctx, d)
 	}
 	return nil, nil, fmt.Errorf("unknown source %q", d.MonitorSource)
+}
+
+// OpenSNMP opens an SNMP reader for a device with the given credentials (the
+// read-only ones for polling, the write credentials for a configuration
+// change).
+func OpenSNMP(ctx context.Context, d *store.Device, creds snmp.Credentials) (monitor.Reader, func(), error) {
+	host, _ := devices.HostPort(d.URL)
+	r, err := snmpsrc.Open(ctx, snmp.Target{Host: host, Port: d.SNMPPort, Version: d.SNMPVersion, Creds: creds,
+		Timeout: 5 * time.Second, Retries: 1})
+	if err != nil {
+		return nil, nil, err
+	}
+	return r, r.Close, nil
 }
 
 // Status returns a copy of a device's monitoring state.

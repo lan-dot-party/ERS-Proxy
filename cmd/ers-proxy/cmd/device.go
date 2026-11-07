@@ -21,7 +21,7 @@ import (
 func init() {
 	deviceAddCmd.Flags().String("name", "", "display name (required)")
 	deviceAddCmd.Flags().String("url", "", "address, e.g. https://192.0.2.10 (required)")
-	deviceAddCmd.Flags().String("kind", store.KindERS, "ers-edm (ERS, EDM through the proxy), vsp-edm (VSP/VOSS, EDM through the proxy), edm-direct (VSP/VOSS, EDM opened directly) or link (other device)")
+	deviceAddCmd.Flags().String("kind", store.KindERS, "ers-edm (ERS, EDM through the proxy), vsp-edm (VSP/VOSS, EDM through the proxy), edm-direct (VSP/VOSS, EDM opened directly), swos (MikroTik SwOS through the proxy), gwn (Grandstream GWN, opened directly) or link (other device)")
 	deviceAddCmd.Flags().String("group", "", "group name (created if missing)")
 	deviceAddCmd.Flags().String("open-mode", store.OpenInherit, "inherit, embedded, tab or window")
 	deviceAddCmd.Flags().String("notes", "", "optional notes")
@@ -86,7 +86,7 @@ var deviceListCmd = &cobra.Command{
 		fmt.Fprintln(tw, "ID\tNAME\tGROUP\tKIND\tURL\tTLS")
 		for _, d := range devs {
 			tlsInfo := "-"
-			if d.EDM() && strings.HasPrefix(d.URL, "https://") {
+			if d.Upstream() && strings.HasPrefix(d.URL, "https://") {
 				tlsInfo = d.TLSMode
 				if d.TLSPin == "" {
 					tlsInfo += ", not pinned"

@@ -10,23 +10,23 @@
 //     with the requested columns in order; index objects are requested as
 //     columns to know the row index;
 //   - octet strings of binary objects come as "0x00:1a:…".
+//
+// The login and the session itself live in internal/edmsession, shared with
+// other users of the device's EDM; this package adds only the read commands.
 package edmsrc
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
-	"github.com/lan-dot-party/ers-proxy/internal/edmlogin"
+	"github.com/lan-dot-party/ers-proxy/internal/edmsession"
 	"github.com/lan-dot-party/ers-proxy/internal/monitor"
-	"github.com/lan-dot-party/ers-proxy/internal/upstream"
 )
 
 // Table describes an EDM table: its index objects and the columns drivers use.
@@ -53,8 +53,8 @@ var Tables = []Table{
 		NAIndex: true},
 	{Index: []string{"lldpRemTimeMark", "lldpRemLocalPortNum", "lldpRemIndex"}, Columns: []string{"lldpRemPortId",
 		"lldpRemPortDesc", "lldpRemSysName", "lldpRemSysCapEnabled"}, NAIndex: true},
-	{Index: []string{"rcVlanId"}, Columns: []string{"rcVlanName", "rcVlanPortMembers"}},
-	{Index: []string{"rcVlanPortIndex"}, Columns: []string{"rcVlanPortDefaultVlanId", "rcVlanPortPerformTagging"}},
+	{Index: []string{"rcVlanId"}, Columns: []string{"rcVlanName", "rcVlanPortMembers", "rcVlanType", "rcVlanStgId"}},
+	{Index: []string{"rcVlanPortIndex"}, Columns: []string{"rcVlanPortDefaultVlanId", "rcVlanPortPerformTagging", "rcVlanPortUntagDefaultVlan"}},
 	{Index: []string{"rcPortIndex"}, Columns: []string{"rcPortOperDuplex", "rcPortOperSpeed"}},
 	{Index: []string{"rcMltId"}, Columns: []string{"rcMltName", "rcMltPortMembers"}},
 	{Index: []string{"s5ChasComGrpIndx", "s5ChasComIndx", "s5ChasComSubIndx"}, Columns: []string{"s5ChasComType",
@@ -70,7 +70,7 @@ var kinds = map[string]monitor.Kind{
 	"ifOutErrors": monitor.KindUint, "ifInDiscards": monitor.KindUint, "ifOutDiscards": monitor.KindUint,
 	"ifType": monitor.KindInt, "ifAdminStatus": monitor.KindInt, "ifOperStatus": monitor.KindInt,
 	"dot1dBasePortIfIndex": monitor.KindInt, "dot3adAggPortAttachedAggID": monitor.KindInt, "lldpLocPortIdSubtype": monitor.KindInt,
-	"rcVlanPortDefaultVlanId": monitor.KindInt, "rcVlanPortPerformTagging": monitor.KindInt, "rcPortOperDuplex": monitor.KindInt,
+	"rcVlanType": monitor.KindInt, "rcVlanStgId": monitor.KindInt, "rcVlanPortDefaultVlanId": monitor.KindInt, "rcVlanPortPerformTagging": monitor.KindInt, "rcVlanPortUntagDefaultVlan": monitor.KindInt, "rcPortOperDuplex": monitor.KindInt,
 	"rcPortOperSpeed": monitor.KindUint,
 	"ifIndex":         monitor.KindInt, "dot1dBasePort": monitor.KindInt, "dot3adAggPortIndex": monitor.KindInt, "lldpLocPortNum": monitor.KindInt,
 	"lldpRemTimeMark": monitor.KindUint, "lldpRemLocalPortNum": monitor.KindInt, "lldpRemIndex": monitor.KindInt,
@@ -84,21 +84,10 @@ var binary = map[string]bool{
 	"lldpRemPortId": true, "lldpLocPortId": true,
 }
 
-// Session is a logged-in EDM session at one switch. Requests are serialized:
-// the switch's web server is slow and handles few connections.
+// Session is the reader's view of a device's EDM session: the shared transport
+// session (see EDM) plus the object names this switch cannot resolve.
 type Session struct {
-	rt        http.RoundTripper
-	base      string
-	user, pwd string
-
-	mu     sync.Mutex
-	jar    *edmlogin.Jar
-	logged bool
-	// refused is set when the switch rejected the login. The session does not
-	// try again: ERS switches lock the account after a few failed logins, and
-	// a poll every minute would keep it locked for people, too. Storing new
-	// credentials creates a new session.
-	refused error
+	*edmsession.Session
 
 	// unknown holds object names the switch answered with Oid_Conversion_Fail
 	// (VOSS knows neither ifName nor ifHighSpeed); they are left out of later
@@ -128,100 +117,21 @@ func (s *Session) markUnknown(name string) {
 
 // NewSession prepares a session; it logs in on the first request.
 func NewSession(rt http.RoundTripper, base, user, password string) *Session {
-	return &Session{rt: rt, base: strings.TrimRight(base, "/"), user: user, pwd: password, jar: edmlogin.NewJar()}
+	return &Session{Session: edmsession.New(rt, base, user, password)}
 }
+
+// EDM returns the shared transport session of the device.
+func (s *Session) EDM() *edmsession.Session { return s.Session }
 
 // ErrSession is returned when the switch rejects the session.
-var ErrSession = errors.New("EDM session not accepted")
-
-// post sends one command, logging in first if needed and once more if the
-// session has expired.
-func (s *Session) post(ctx context.Context, path string, form url.Values) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for attempt := 0; attempt < 2; attempt++ {
-		if !s.logged {
-			if s.refused != nil {
-				return "", fmt.Errorf("%w (not retried until the stored login changes)", s.refused)
-			}
-			s.jar = edmlogin.NewJar()
-			if err := edmlogin.Login(ctx, s.rt, s.base, s.jar, s.user, s.pwd); err != nil {
-				if errors.Is(err, edmlogin.ErrRejected) || errors.Is(err, edmlogin.ErrChangePassword) {
-					s.refused = err
-				}
-				return "", err
-			}
-			s.logged = true
-		}
-		f := url.Values{}
-		for k, v := range form {
-			f[k] = v
-		}
-		f.Set("userId", s.jar.Value("auth"))
-		rctx := ctx
-		if upstream.EDMReadCommand(f.Get("command")) {
-			rctx = upstream.WithRetry(ctx)
-		}
-		req, err := http.NewRequestWithContext(rctx, http.MethodPost, s.base+path, strings.NewReader(f.Encode()))
-		if err != nil {
-			return "", err
-		}
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-		req.Header.Set("X-Requested-With", "XMLHttpRequest")
-		req.Header.Set("Cookie", s.jar.Header())
-		resp, err := (&http.Client{Transport: s.rt, Timeout: time.Minute}).Do(req)
-		if err != nil {
-			return "", err
-		}
-		body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		resp.Body.Close()
-		if err != nil {
-			return "", err
-		}
-		s.jar.Store(resp)
-		text := string(body)
-		if resp.StatusCode == http.StatusUnauthorized || strings.Contains(text, "Not Authorized") ||
-			strings.Contains(text, "submitForm") { // the login page instead of data
-			s.logged = false
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			return "", fmt.Errorf("%s: HTTP %d", path, resp.StatusCode)
-		}
-		return text, nil
-	}
-	return "", ErrSession
-}
-
-// Logout ends the switch's session (GET /logout.html, like EDM's "Log out"
-// link). VSP switches allow only a few web sessions at a time, so a session
-// that is replaced should not wait for the switch's idle timeout.
-func (s *Session) Logout(ctx context.Context) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.logged {
-		return
-	}
-	s.logged = false
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.base+"/logout.html", nil)
-	if err != nil {
-		return
-	}
-	req.Header.Set("Cookie", s.jar.Header())
-	resp, err := (&http.Client{Transport: s.rt, Timeout: 30 * time.Second}).Do(req)
-	if err != nil {
-		return
-	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-	resp.Body.Close()
-}
+var ErrSession = edmsession.ErrSession
 
 // Reader implements monitor.Reader on a session.
 type Reader struct{ S *Session }
 
 // Scalars implements monitor.Reader.
 func (r Reader) Scalars(ctx context.Context, names ...string) (map[string]monitor.Value, error) {
-	text, err := r.S.post(ctx, "/jsp/getFormMibs.jsp", url.Values{"command": {"getVariables"}, "varNames": {strings.Join(names, ",")}})
+	text, err := r.S.Post(ctx, "/jsp/getFormMibs.jsp", url.Values{"command": {"getVariables"}, "varNames": {strings.Join(names, ",")}})
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +179,7 @@ func (r Reader) Columns(ctx context.Context, names ...string) (monitor.Table, er
 			if t.NAIndex {
 				cols = append([]string{"indexNA"}, want...)
 			}
-			text, err := r.S.post(ctx, "/jsp/getTableMibs.jsp", url.Values{"command": {"getTableVariables"}, "varNames": {strings.Join(cols, ",")}})
+			text, err := r.S.Post(ctx, "/jsp/getTableMibs.jsp", url.Values{"command": {"getTableVariables"}, "varNames": {strings.Join(cols, ",")}})
 			if err != nil {
 				return nil, err
 			}

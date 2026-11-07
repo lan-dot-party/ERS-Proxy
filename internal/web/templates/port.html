@@ -9,6 +9,7 @@
   </div>
 </div>
 
+{{if .Switch.Config}}{{template "config_banner" (dict "C" .Switch.Config "P" $)}}{{end}}
 <div class="grid-2">
   <section class="card">
     <h2>{{$.T "sw.port"}}</h2>
@@ -21,6 +22,44 @@
     {{template "events" (dict "Events" .Events "P" $)}}
   </section>
 </div>
+
+{{with .Switch.Config}}{{with .Port}}
+<section class="card config-port">
+  <h2>{{$.T "config.settings"}}</h2>
+  <form method="post" action="{{$.Data.Switch.Config.Base}}/preview" class="form-grid config-form" id="config-port-form">
+    <input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="kind" value="port"><input type="hidden" name="ifindex" value="{{.IfIndex}}">
+    {{if .ShowAdmin}}<label>{{$.T "config.admin_state"}}
+      <select name="admin"><option value="">{{$.T "config.keep"}}</option><option value="up">{{$.T "config.enable"}}</option><option value="down">{{$.T "config.disable"}}</option></select>
+    </label>{{end}}
+    {{if $.Data.Switch.Config.Caps.Alias}}<label>{{$.T "config.name"}}<input name="alias" value="{{.Alias}}"{{if $.Data.Switch.Config.MaxAlias}} maxlength="{{$.Data.Switch.Config.MaxAlias}}"{{end}}></label>{{end}}
+    {{if .ShowPoE}}<label>{{$.T "config.poe"}}
+      <select name="poe"><option value="">{{$.T "config.keep"}}</option><option value="on">{{$.T "config.poe_on"}}</option><option value="off">{{$.T "config.poe_off"}}</option></select>
+    </label>{{end}}
+    {{if .Modes}}
+    {{$f := .}}
+    <label>{{$.T "config.vlan_mode"}}
+      <select name="vlan_mode" class="config-mode">
+        {{range .Modes}}<option value="{{.}}"{{if eq . $f.Mode}} selected{{end}}>{{if eq . "keep"}}{{$.T "config.keep"}}{{else}}{{$.T (print "config.mode_" .)}}{{end}}</option>{{end}}
+      </select>
+    </label>
+    <label class="config-untagged">{{$.T "config.untagged_vlan"}}
+      <select name="untagged">
+        <option value="0"{{if eq .Untagged 0}} selected{{end}}>{{$.T "config.no_vlan"}}</option>
+        {{range .VLANs}}<option value="{{.ID}}"{{if eq .ID $f.Untagged}} selected{{end}}>{{.ID}}{{if .Name}} – {{.Name}}{{end}}</option>{{end}}
+      </select>
+    </label>
+    <fieldset class="config-tagged">
+      <legend>{{$.T "config.tagged_vlans"}}</legend>
+      <div class="config-vlan-checks">
+      {{range .VLANs}}<label class="check"><input type="checkbox" name="tagged" value="{{.ID}}"{{if .Tagged}} checked{{end}}> {{.ID}}{{if .Name}} – {{.Name}}{{end}}</label>{{end}}
+      </div>
+    </fieldset>
+    {{end}}
+    <div class="actions"><button type="submit" class="primary">{{$.T "config.preview"}}</button></div>
+    <p class="muted small span-all">{{$.T "config.apply_hint"}}</p>
+  </form>
+</section>
+{{end}}{{end}}
 
 <section class="card">
   <div class="card-head">

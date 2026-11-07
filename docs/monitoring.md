@@ -2,7 +2,9 @@
 
 The port dashboard shows every port of every monitored switch on one page: link state, speed
 and duplex, VLANs, PoE, link aggregation, LLDP neighbour and traffic with stored history. It
-**only reads**. ERS-Proxy never sends SNMP SET requests and never writes to a switch through EDM.
+**only reads**: polling never sends SNMP SET requests and never writes to a switch through EDM.
+Changing switch settings is a separate, optional feature that is off unless enabled in
+`config.yaml`; see [switch-configuration.md](switch-configuration.md).
 
 ## What you see
 
@@ -35,13 +37,13 @@ In the device form (admin), section **Monitoring**:
 
 | Field | Meaning |
 |---|---|
-| Source | `none` (default), `snmp`, or `edm` (see below). |
-| Driver | `auto` detects the driver from `sysObjectID` once per polling loop; or fix `generic`, `ers`, `cisco`, `tplink` or `voss`. See [compatibility.md](compatibility.md). |
+| Source | `none` (default), `snmp`, `edm`, `swos` or `gwn` (see below). |
+| Driver | `auto` detects the driver from `sysObjectID` once per polling loop; or fix `generic`, `ers`, `cisco`, `tplink`, `voss`, `swos` or `grandstream`. See [compatibility.md](compatibility.md). |
 | Interval | 30–3600 seconds, default 60. |
 | SNMP port | Port 161 by default. |
 
 The SNMP host is the host of the device URL. The SNMP version and the credentials are entered
-together: when adding a device (optional, section **SNMP access** of the form) or later in the
+together: when adding a device (optional, section **Credentials** of the form, together with the switch login) or later in the
 card **SNMP access** on the edit page. Switching the version there (v2c ↔ v3) replaces the
 stored credentials; the form shows only the fields of the chosen version and security level.
 
@@ -91,6 +93,68 @@ objects through the switch's web interface (`getFormMibs.jsp`, `getTableMibs.jsp
   poll with `HTTP 503` or refuse connections for a few seconds (the next poll works).
 
 Prefer SNMP whenever it is available.
+
+### SwOS source (MikroTik)
+
+SwOS's SNMP agent reports ports, link, speed and traffic, but no VLANs, no duplex and no LAGs.
+The source `swos` reads them from the web API that SwOS's own web interface uses (`sys.b`,
+`link.b`, `fwd.b`, `vlan.b`, `lacp.b`, `stats.b`). It
+
+- works only for devices of kind `swos` and needs the device's stored **web login** (the same
+  one the proxy uses; SwOS has only the account `admin`);
+- sends only GET requests for these six files – never `snmp.b` (it holds the SNMP community)
+  and never the POSTs SwOS uses to apply settings;
+- logs in with HTTP Digest on the server; SwOS keeps no session, so nothing has to be logged
+  out;
+- names ports like SwOS does (`ifName` = `ETH/BOOT`, `SFP1`, … , `ifAlias` = the configured
+  name; with SNMP the configured name is the port name);
+- derives the tagging per VLAN, which SwOS does not store: a member port sends its default VLAN
+  untagged and other VLANs tagged; a port set to "VLAN Receive: only tagged" is shown as a trunk
+  with all VLANs tagged; ports with "VLAN Mode: disabled" get no VLAN data;
+- shows LAGs as "Trunk1" … "Trunk15";
+- works with an interval of 30 seconds or more.
+
+Verified on a CRS305-1G-4S+ with SwOS 2.18: ports, speed, duplex, VLANs, PVID and traffic match
+SNMP and SwOS's own pages. LAGs and PoE were not configured on the tested switch; PoE is not
+read.
+
+### GWN source (Grandstream)
+
+The SNMP agent of a Grandstream GWN switch (tested: GWN7721) has no VLAN table, no LLDP, no
+duplex and no LAGs. The source `gwn` reads them from the web API of the switch's own web
+interface and combines them with SNMP. It
+
+- works only for devices of kind `gwn` and needs the device's stored **web login**; the
+  address should be `http://` (see below);
+- sends only read commands from an allow-list (system information, ports, 802.1Q VLANs and
+  PVIDs, VLAN mode, LLDP neighbours) and POSTs only login and logout – never a setting and not
+  the configuration file (it contains secrets);
+- reads traffic counters, errors, discards and the time of the last change from SNMP: **store
+  SNMP credentials for the device**, otherwise there are no traffic rates (a note on the
+  switch page says so). A failing SNMP read becomes a note and does not fail the poll;
+- names ports like the web interface (`2.5GE1`, `SFP+10`; `ifAlias` = the port description)
+  and shows LAGs as "LAG1" …;
+- reads the VLANs in 802.1Q mode; with port-based VLANs the switch has no 802.1Q VLANs and a
+  note says so;
+- takes about 2 s per poll.
+
+The switch allows **one web session per account**: while an administrator is logged in to the
+web interface with the same account, ERS-Proxy's login is refused and that poll fails
+temporarily (next poll tries again). The client logs in, reads and logs out within each poll.
+If the switch offers it, use a dedicated account for ERS-Proxy. A rejected login is not
+retried until the stored login or address changes, because the switch locks the account after
+several failed logins.
+
+**Use an `http://` address.** On the tested firmware (1.0.7.128) a TCP connection to the HTTPS
+port that the client closes with a reset reboots the whole switch (about 50 s). ERS-Proxy
+closes connections normally, but **never run port scans against a GWN switch**. The web API is
+the same on port 80. The kind `gwn` opens the switch's web interface directly in a tab.
+
+Verified read-only on a GWN7721 (firmware 1.0.7.128): ports, speed, VLANs, PVID, tagging,
+LLDP and rates match the switch's web interface. LAGs, PoE models and larger GWN models were
+not seen; PoE is not read. SNMP alone (source `snmp`, driver `grandstream`) shows ports,
+speed, PVID and traffic. The SNMP agent drops requests with more than four variable bindings,
+so ERS-Proxy asks for at most four objects per GET.
 
 SNMP and the EDM data source use the host of the device's address (`url`) – the same address the
 web interface is reached at. For devices whose management address differs from the address of
@@ -182,8 +246,10 @@ ERS-Proxy the first poll again only provides the baseline.
 - Credentials are stored encrypted (AES-256-GCM, key in `secret_key_file`), bound to device,
   host and SNMP port, write-only in the UI, and excluded from logs, audit log and exports. See
   [security.md](security.md).
-- Nothing is written to devices. The `internal/snmp` package has no SET API and tests
+- Monitoring writes nothing to devices. The `internal/snmp` package has no SET API and tests
   (`TestReadOnly`) fail if the SNMP code or the monitor package calls a set function.
+  Configuration changes (optional) live in `internal/switchcfg` and use their own write
+  credentials; the read-only community here is never used for writing.
 - Everything a switch reports (names, aliases, neighbour names) is treated as untrusted and
   escaped in the UI.
 

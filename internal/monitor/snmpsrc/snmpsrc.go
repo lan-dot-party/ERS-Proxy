@@ -38,6 +38,11 @@ func oidOf(name string) (string, error) {
 	return oid, nil
 }
 
+// maxGetOIDs is the most objects asked for in one GET. Grandstream GWN
+// switches (GWN7721, firmware 1.0.7) silently drop requests with more than
+// four variable bindings.
+const maxGetOIDs = 4
+
 // Scalars implements monitor.Reader.
 func (r *Reader) Scalars(ctx context.Context, names ...string) (map[string]monitor.Value, error) {
 	out := map[string]monitor.Value{}
@@ -57,8 +62,8 @@ func (r *Reader) Scalars(ctx context.Context, names ...string) (map[string]monit
 			return nil, err
 		}
 		chunk := oids
-		if len(chunk) > 10 {
-			chunk = chunk[:10]
+		if len(chunk) > maxGetOIDs {
+			chunk = chunk[:maxGetOIDs]
 		}
 		oids = oids[len(chunk):]
 		res, err := r.g.Get(chunk)

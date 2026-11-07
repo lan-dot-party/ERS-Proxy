@@ -131,4 +131,31 @@
     svg.addEventListener("pointerdown", show);
     svg.addEventListener("pointerleave", hide);
   });
+
+  // Pending configuration change: count down to the deadline, then reload so
+  // that the page shows what happened. Works without JS too (the buttons are
+  // plain forms; the server reverts at the deadline).
+  Array.prototype.forEach.call(document.querySelectorAll(".config-countdown[data-deadline]"), function (e) {
+    var deadline = Number(e.dataset.deadline) * 1000;
+    function tick() {
+      var left = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+      e.textContent = Math.floor(left / 60) + ":" + ("0" + (left % 60)).slice(-2);
+      if (left > 0) {
+        setTimeout(tick, 1000);
+      } else {
+        setTimeout(function () { window.location.reload(); }, 4000);
+      }
+    }
+    tick();
+  });
+
+  // Port settings form: the mode decides which VLAN fields apply. Without JS
+  // all fields stay visible and the mode select decides on the server.
+  Array.prototype.forEach.call(document.querySelectorAll("form.config-form"), function (form) {
+    var mode = form.querySelector("select.config-mode");
+    if (!mode) return;
+    function sync() { form.dataset.mode = mode.value; }
+    mode.addEventListener("change", sync);
+    sync();
+  });
 })();

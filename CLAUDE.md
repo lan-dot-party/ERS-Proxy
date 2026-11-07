@@ -16,7 +16,8 @@ installation.
 2. `docs/architecture.md` – package layout, request flow, data model, security mechanisms.
    Read this instead of re-exploring the code.
 3. `docs/compatibility.md` – which switches and firmware versions were verified, and how.
-4. `docs/hardware-tests.md` – the checklist for tests on real switches (read-only).
+4. `docs/hardware-tests.md` – the checklist for tests on real switches (read-only, except
+   section 9 for configuration changes on an approved test switch).
 
 ## "Continue" / "mach weiter"
 
@@ -51,7 +52,13 @@ Do not commit, push or test against real switches unless explicitly asked.
 - **No inline scripts or styles** in the management UI (CSP). Device names and anything a
   switch reports are escaped by `html/template`.
 - **Hardware is production equipment.** Never send SNMP sets or EDM writes to a real switch in
-  tests.
+  tests. Automated tests (`go test`) never write to real hardware. Manual write tests (phase
+  8) only on a switch the maintainer has explicitly approved for writes, on unused ports and
+  test VLANs, and revert afterwards.
+- **Writes stay contained.** Only `internal/switchcfg` writes to switches, and only when
+  `configure.enabled` is set in `config.yaml` – never add another way to enable it (environment
+  variable, flag, UI). Monitoring (`internal/monitor`, `internal/snmp`) stays read-only; keep
+  the `TestReadOnly` tests and the import/`Set` guards in `internal/switchcfg` passing.
 - No change to configuration or data model without matching docs (`docs/configuration.md`,
   `docs/architecture.md`). Never change a released migration – add a new file.
 

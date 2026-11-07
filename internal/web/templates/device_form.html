@@ -10,6 +10,8 @@
         <option value="ers-edm"{{if eq $d.Kind "ers-edm"}} selected{{end}}>{{.T "kind.ers-edm"}}</option>
         <option value="vsp-edm"{{if eq $d.Kind "vsp-edm"}} selected{{end}}>{{.T "kind.vsp-edm"}}</option>
         <option value="edm-direct"{{if eq $d.Kind "edm-direct"}} selected{{end}}>{{.T "kind.edm-direct"}}</option>
+        <option value="swos"{{if eq $d.Kind "swos"}} selected{{end}}>{{.T "kind.swos"}}</option>
+        <option value="gwn"{{if eq $d.Kind "gwn"}} selected{{end}}>{{.T "kind.gwn"}}</option>
         <option value="link"{{if eq $d.Kind "link"}} selected{{end}}>{{.T "kind.link"}}</option>
       </select>
     </label>
@@ -40,9 +42,10 @@
           <option value="off"{{if eq $d.Isolation "off"}} selected{{end}}>{{.T "isolation.off"}}</option>
         </select>
       </label>
-      {{if $d.HasCredentials}}<label class="check proxy-only"><input type="checkbox" name="auto_login" value="1"{{if $d.AutoLogin}} checked{{end}}> {{.T "devices.auto_login"}}</label>{{end}}
+      {{if and $d.HasCredentials (not $d.SwOS)}}<label class="check proxy-only"><input type="checkbox" name="auto_login" value="1"{{if $d.AutoLogin}} checked{{end}}> {{.T "devices.auto_login"}}</label>{{end}}
       <p class="muted small span-all proxy-only">{{.T "devices.isolation_hint"}}</p>
-      <p class="muted small span-all direct-only">{{.T "devices.direct_hint"}}</p>
+      <p class="muted small span-all direct-only not-gwn">{{.T "devices.direct_hint"}}</p>
+      <p class="muted small span-all gwn-only">{{.T "devices.direct_hint_gwn"}}</p>
     </fieldset>
     <fieldset>
       <legend>{{.T "devices.monitoring"}}</legend>
@@ -58,16 +61,39 @@
       </label>
       <label>{{.T "col.monitor_interval"}}<input name="monitor_interval" type="number" min="30" max="3600" value="{{$d.MonitorInterval}}" class="narrow"{{if eq .Data.ErrKey "monitor_interval"}} aria-invalid="true"{{end}}></label>
       <label>{{.T "col.snmp_port"}}<input name="snmp_port" type="number" min="1" max="65535" value="{{$d.SNMPPort}}" class="narrow"{{if eq .Data.ErrKey "snmp_port"}} aria-invalid="true"{{end}}></label>
-      <p class="muted small span-all">{{.T "devices.monitoring_hint"}}</p>
-      {{if .Data.New}}
+      <p class="muted small span-all">{{if .Data.Configure}}{{.T "devices.monitoring_hint_cfg"}}{{else}}{{.T "devices.monitoring_hint"}}{{end}}</p>
+    </fieldset>
+    {{if and .Data.Configure (not .Data.New)}}
+    <fieldset class="config-source">
+      <legend>{{.T "devices.config_source"}}</legend>
+      <label>{{.T "devices.config_source"}}
+        <select name="config_source">
+          <option value="none"{{if eq $d.ConfigSource "none"}} selected{{end}}>{{.T "config.src_none"}}</option>
+          {{if $d.EDM}}<option value="edm"{{if eq $d.ConfigSource "edm"}} selected{{end}}>{{.T "config.src_edm"}}</option>{{end}}
+          <option value="snmp"{{if eq $d.ConfigSource "snmp"}} selected{{end}}>{{.T "config.src_snmp"}}</option>
+        </select>
+      </label>
+      <label>{{.T "devices.config_password"}}<input name="confirm_password" type="password" autocomplete="current-password"{{if eq .Data.ErrKey "wrong_password"}} aria-invalid="true"{{end}}></label>
+      <p class="muted small span-all">{{.T "devices.config_hint"}}</p>
+    </fieldset>
+    {{end}}
+    {{if .Data.New}}
+    <fieldset>
+      <legend>{{.T "devices.access_new"}}</legend>
+      <div class="form-grid span-all ers-only">
+        <h3 class="span-all">{{.T "devices.login_new"}}</h3>
+        <label>{{.T "login.username"}}<input name="login_username" maxlength="64" autocomplete="off"{{if eq .Data.ErrKey "login_missing"}} aria-invalid="true"{{end}}></label>
+        <label>{{.T "login.password"}}<input name="login_password" type="password" maxlength="64" autocomplete="new-password"{{if eq .Data.ErrKey "login_missing"}} aria-invalid="true"{{end}}></label>
+        <p class="small muted span-all">{{.T "devices.login_new_hint"}}</p>
+      </div>
       <div class="form-grid span-all snmp-box snmp-{{$d.SNMPVersion}} snmp-level-authPriv">
         <h3 class="span-all">{{.T "devices.snmp"}}</h3>
         {{template "snmp_fields" .}}
-        <label>{{.T "devices.confirm_password"}}<input name="confirm_password" type="password" autocomplete="current-password"></label>
-        <p class="small muted span-all">{{.T "devices.snmp_new_hint"}}</p>
       </div>
-      {{end}}
+      <label>{{.T "devices.confirm_password"}}<input name="confirm_password" type="password" autocomplete="current-password"{{if eq .Data.ErrKey "wrong_password"}} aria-invalid="true"{{end}}></label>
+      <p class="small muted span-all">{{.T "devices.access_new_hint"}}</p>
     </fieldset>
+    {{end}}
     <label class="check"><input type="checkbox" name="health_enabled" value="1"{{if $d.HealthEnabled}} checked{{end}}> {{.T "devices.health"}}</label>
     <label class="span-all">{{.T "col.notes"}}<textarea name="notes" rows="2" maxlength="1000">{{$d.Notes}}</textarea></label>
     <div class="actions">
@@ -90,10 +116,42 @@
     </div>
   </form>
   <p class="small muted">{{.T "devices.snmp_hint"}}</p>
-  <p class="small muted">{{.T "devices.snmp_readonly"}}</p>
+  <p class="small muted">{{if .Data.Configure}}{{.T "devices.snmp_readonly_cfg"}}{{else}}{{.T "devices.snmp_readonly"}}{{end}}</p>
+</section>
+{{if .Data.Configure}}
+<section class="card config-snmp-write">
+  <h3>{{.T "devices.snmp_write"}}</h3>
+  <p class="small muted">{{if $d.HasSNMPWriteCredentials}}{{.T "devices.snmp_write_stored"}} (SNMP{{$d.SNMPVersion}}){{else}}{{.T "devices.snmp_write_none"}}{{end}}</p>
+  <form method="post" action="/admin/devices/{{$d.ID}}/snmp-write" class="form-grid" id="snmp-write-form" autocomplete="off">
+    <input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="snmp_version" value="{{$d.SNMPVersion}}">
+    {{if eq $d.SNMPVersion "v3"}}
+    <label>{{.T "snmp.username"}}<input name="username" maxlength="64" autocomplete="off"></label>
+    <label>{{.T "snmp.security_level"}}
+      <select name="security_level">{{range $l := securityLevels}}<option value="{{$l}}"{{if eq $l "authPriv"}} selected{{end}}>{{$l}}</option>{{end}}</select>
+    </label>
+    <label>{{.T "snmp.auth_protocol"}}
+      <select name="auth_protocol">{{range $p := authProtocols}}<option value="{{$p}}"{{if eq $p "SHA-256"}} selected{{end}}>{{$p}}</option>{{end}}</select>
+    </label>
+    <label>{{.T "snmp.auth_password"}}<input name="auth_password" type="password" maxlength="128" autocomplete="new-password"></label>
+    <label>{{.T "snmp.priv_protocol"}}
+      <select name="priv_protocol">{{range $p := privProtocols}}<option value="{{$p}}"{{if eq $p "AES-128"}} selected{{end}}>{{$p}}</option>{{end}}</select>
+    </label>
+    <label>{{.T "snmp.priv_password"}}<input name="priv_password" type="password" maxlength="128" autocomplete="new-password"></label>
+    <label>{{.T "snmp.context_name"}}<input name="context_name" maxlength="64" autocomplete="off"></label>
+    {{else}}
+    <label>{{.T "snmp.community"}}<input name="community" type="password" maxlength="128" autocomplete="new-password"></label>
+    {{end}}
+    <label>{{.T "devices.confirm_password"}}<input name="confirm_password" type="password" required autocomplete="current-password"></label>
+    <div class="actions">
+      <button type="submit">{{.T "action.save"}}</button>
+      {{if $d.HasSNMPWriteCredentials}}<button type="submit" name="clear" value="1" class="danger" data-confirm="{{.T "devices.snmp_write_clear_confirm"}}" formnovalidate>{{.T "devices.snmp_clear"}}</button>{{end}}
+    </div>
+  </form>
+  <p class="small muted">{{.T "devices.snmp_write_hint"}}</p>
 </section>
 {{end}}
-{{if and (not .Data.New) $d.EDM}}
+{{end}}
+{{if and (not .Data.New) $d.Upstream}}
 <div class="grid-2">
 <section class="card">
   <h3>{{.T "devices.tls"}}</h3>
@@ -115,8 +173,8 @@
   {{end}}
 </section>
 <section class="card">
-  <h3>{{if $d.Proxied}}{{.T "devices.login"}}{{else}}{{.T "devices.login_direct"}}{{end}}</h3>
-  <p class="small muted">{{if $d.HasCredentials}}{{.T "devices.login_stored"}}{{else}}{{.T "devices.login_none"}}{{end}}</p>
+  <h3>{{if or $d.SwOS $d.GWN}}{{.T "devices.login_swos"}}{{else if $d.Proxied}}{{.T "devices.login"}}{{else}}{{.T "devices.login_direct"}}{{end}}</h3>
+  <p class="small muted">{{if $d.HasCredentials}}{{.T "devices.login_stored"}}{{else if $d.SwOS}}{{.T "devices.login_none_swos"}}{{else}}{{.T "devices.login_none"}}{{end}}</p>
   <form method="post" action="/admin/devices/{{$d.ID}}/credentials" class="form-grid" autocomplete="off">
     <input type="hidden" name="_csrf" value="{{.CSRF}}">
     {{$max := 64}}{{if eq $d.Kind "ers-edm"}}{{$max = 15}}{{end}}
@@ -129,7 +187,7 @@
     </div>
   </form>
   <p class="small muted">{{.T "devices.login_hint"}}</p>
-  {{if not $d.Proxied}}<p class="small muted">{{.T "devices.login_hint_direct"}}</p>{{end}}
+  {{if $d.SwOS}}<p class="small muted">{{.T "devices.login_hint_swos"}}</p>{{else if $d.GWN}}<p class="small muted">{{.T "devices.login_hint_gwn"}}</p>{{else if not $d.Proxied}}<p class="small muted">{{.T "devices.login_hint_direct"}}</p>{{end}}
 </section>
 </div>
 {{end}}

@@ -2,7 +2,9 @@
 
 A driver tells the port dashboard where one vendor keeps its data. This page is for
 contributors; administrators want [monitoring.md](monitoring.md). Everything here is
-**read-only**: a driver never writes to a device.
+**read-only**: a driver never writes to a device. Changing settings is done by planners in
+`internal/switchcfg` (see [switch-configuration.md](switch-configuration.md) and "Planners for
+configuration changes" below).
 
 ## Architecture
 
@@ -11,13 +13,17 @@ poller ──> Driver.Collect(ctx, Reader) ──> *monitor.Snapshot ──> Rat
                           │
               Reader (by MIB object name)
               ├── snmpsrc  (SNMP GET/walk; names -> OIDs via monitor.Objects)
-              └── edmsrc   (EDM getFormMibs/getTableMibs; ERS only, experimental)
+              ├── edmsrc   (EDM getFormMibs/getTableMibs; ERS and VSP, experimental)
+              ├── swossrc  (MikroTik SwOS web API, served under standard object names)
+              └── gwnsrc   (Grandstream GWN web API plus SNMP, served under standard object names)
 ```
 
 - **Reader** (`internal/monitor/monitor.go`) reads objects by MIB name:
   `Scalars(ctx, names...)` and `Columns(ctx, names...)`, which walks table columns and merges
   them by row index (`"12"`, `"1.5"`; split with `monitor.Ints`). Objects the agent does not
-  implement are simply absent. Drivers must not depend on the transport.
+  implement are simply absent. `snmpsrc` asks for at most four scalars per GET
+  (`maxGetOIDs`), because some agents (Grandstream GWN) silently drop requests with more
+  variable bindings. Drivers must not depend on the transport.
 - **`monitor.Objects`** (`internal/monitor/objects.go`) maps every object name to its OID without
   instance suffix. Scalars are read with `.0` appended. `snmp-capture` walks exactly these
   objects. The EDM reader can only serve the tables listed in `edmsrc.Tables`; everything else
@@ -33,7 +39,7 @@ poller ──> Driver.Collect(ctx, Reader) ──> *monitor.Snapshot ──> Rat
   - `SkipPoE` leaves POWER-ETHERNET-MIB out; a driver with a vendor PoE table calls
     `Base.ReadPoE` only when that table is missing (`tplink` does this).
 - **`Driver`** interface:
-  - `Name()`: the identifier stored with a device (`generic`, `ers`, `cisco`, `tplink`, `voss`).
+  - `Name()`: the identifier stored with a device (`generic`, `ers`, `cisco`, `tplink`, `voss`, `swos`, `grandstream`).
   - `Match(System) int`: how well the driver fits. `0` not at all, `10` generic fallback, `90`
     probably (for example by `sysDescr`), `100` made for this vendor (by `sysObjectID` prefix).
   - `Collect(ctx, Reader) (*Snapshot, error)`.
@@ -94,7 +100,7 @@ VLANs on the wrong ports.
    }
    ```
    Look at `generic.go` (Q-BRIDGE), `tplink.go` (vendor table with text port lists), `cisco.go` (vendor VLAN tables
-   with Q-BRIDGE fallback) `ers.go` (own numbering, PortSet bitmaps, stack units) and `voss.go` (slot/port from `ifName`, reuses the ERS RAPID-CITY helpers). A failing
+   with Q-BRIDGE fallback) `ers.go` (own numbering, PortSet bitmaps, stack units), `voss.go` (slot/port from `ifName`, reuses the ERS RAPID-CITY helpers) `swos.go` (standard MIBs only; VLANs come from a reader that translates a web API, see below) and `grandstream.go` (port numbers from `ifName`, model/firmware from vendor scalars; VLANs, duplex and LLDP from `gwnsrc`). A failing
    optional read should add a note and keep going; only a missing system group or interface
    table is an error.
 4. **Register** it in `drivers.All()` (`generic.go`). Give `Match` a score of 100 for the
@@ -131,6 +137,31 @@ VLANs on the wrong ports.
    [compatibility.md](compatibility.md): detection, data used, and how it was verified
    (synthetic fixtures only, or a named model and firmware on real hardware).
 
+## Readers that translate a vendor API
+
+When a vendor keeps data only in its web interface, a reader can translate it into the standard
+object names, so that drivers stay independent of the transport. `swossrc` does this for
+MikroTik SwOS: it loads the switch's state once per poll (`internal/swos`) and serves it as
+system group, IF-MIB, `dot3StatsDuplexStatus`, `dot1dBasePortIfIndex`,
+`dot3adAggPortAttachedAggID` (128 + trunk number) and Q-BRIDGE (`dot1qPvid`,
+`dot1qVlanStaticName`, current egress/untagged port lists). Whatever the vendor does not store
+(SwOS has no per-VLAN tagging) is derived in the reader and documented there; the driver adds a
+note to the snapshot. The `swos` driver then works the same over SNMP and over the web API.
+
+`gwnsrc` combines two sources for Grandstream GWN switches. The web API
+(`internal/gwn`, allow-listed read commands only) serves the system group, IF-MIB without
+counters (`ifName` = the web interface's label, `ifAlias` = port description),
+`dot3StatsDuplexStatus`, `dot1dBasePortIfIndex`, `dot3adAggPortAttachedAggID` (1000 + LAG number),
+Q-BRIDGE (`dot1qPvid`, VLAN names, current egress/untagged port lists) and LLDP
+(`lldpRemSysName`, `lldpRemPortId` at index `0.<port>.1`). The web API has no byte counters, so
+when SNMP credentials are stored for the device the reader reads the counters (octets, errors,
+discards, `ifLastChange`) and every object the web API lacks from SNMP; without them there are
+no traffic rates. A failing SNMP read does not fail the poll: it becomes a note
+(`Reader.SourceNotes`), which the `grandstream` driver copies into `Snapshot.Notes`. The switch
+allows one web session per account, so the client logs in, reads and logs out within each poll
+(`gwn.ErrBusy` is retried next poll, `gwn.ErrLogin` not until the login changes). Tests use the
+fake switch `internal/gwn/gwntest`.
+
 ## Rules
 
 - **No vendor files in the repository.** No MIB files and no real captures; OIDs only, with the
@@ -138,9 +169,30 @@ VLANs on the wrong ports.
 - **Treat everything a device reports as untrusted.** Names, aliases and neighbour data are
   displayed after escaping; do not build paths, commands or queries from them, and do not
   assume sizes (bitmaps may be shorter or longer than expected, indexes may be missing).
-- **No SNMP SET, no EDM writes**, not even "harmless" ones.
+- **No SNMP SET, no EDM writes** in a driver, not even "harmless" ones.
 - **Record assumptions.** If a driver relies on facts that no real device confirmed (port
   numbering, bitmap order, tagging semantics), add a line to `Snapshot.Notes`. Notes appear on
   the switch page and in `snmp-test --collect`; the `ers` driver does this for stacks
   (numbering of units 2–8).
 - A device that lacks an optional table must still produce a snapshot.
+
+## Planners for configuration changes
+
+Changing settings is optional (`configure.enabled`) and separate from drivers. A planner
+(`switchcfg.Planner`, one per driver name) turns a `switchcfg.Change` into a `Plan`: it reads
+the current values through the same `monitor.Reader` interface, checks the change, and returns
+ordered steps, the inverse steps from the values it read, the expected values for the
+read-back, warnings and refusals. It never writes itself; the manager does.
+
+- Put a planner in its own package below `internal/switchcfg` (see `rcplan` for RAPID-CITY
+  switches) and register it in `cmd/ers-proxy/cmd/configure.go`.
+- Objects a planner reads must be in `monitor.Objects` (the SNMP reader resolves names only
+  there); objects that are only written go into `switchcfg.Objects`. For EDM, add tables the
+  planner reads to `edmsrc.Tables`.
+- Compute the inverse as the transition from the new state back to the old one, with absolute
+  values, so that it also works on a partly applied change. Test every plan with
+  `switchcfgtest`: apply, verify `Expected`, apply the inverse, and compare the whole state with
+  the original.
+- Refuse what cannot be restored, and warn about anything that could cut the switch off
+  (uplinks, LAGs, the management VLAN).
+- Never test writes against a real switch except one the maintainer has approved for it.

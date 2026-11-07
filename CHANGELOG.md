@@ -6,7 +6,60 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Grandstream GWN switches (verified read-only on a GWN7721, firmware 1.0.7.128): device kind
+  `gwn` (the browser opens the switch's web interface directly in a tab; the stored login is
+  the web login), driver `grandstream` and data source `gwn`, which reads VLANs, duplex, LLDP
+  and LAGs from the switch's web API (read commands only, one login per poll because the switch
+  allows one web session per account) and counters from SNMP. Use an `http://` address: on the
+  tested firmware a TCP reset on the HTTPS port reboots the switch, so never port-scan GWN
+  switches.
+- Changing switch settings from the dashboard (phase 8, experimental, VSP/VOSS only, verified
+  on one VSP over EDM only; see `docs/switch-configuration.md`). Off unless `configure.enabled:
+  true` is set in `config.yaml` and the device has a configuration channel (EDM or SNMP);
+  admins only. Port VLANs, port state, port name, VLANs and PoE; every change is previewed,
+  applied "commit confirmed" and reverted automatically unless it is confirmed in time.
+  Change history per switch, audit log entries.
+- `configure.enabled` and `configure.confirm_timeout` in `config.yaml`. Writing to switches is
+  off by default and can only be turned on in the configuration file; no environment variable
+  enables it.
+- Migration `00004_configure.sql`: `devices.config_source`, `devices.snmp_write_credentials` and
+  the table `config_changes`.
+- Writers for phase 8: over EDM (`setVariables`, formats from EDM's own scripts,
+  tested against the mock switch) and over SNMP SET (tested against snmpsim), plus encrypted
+  SNMP write credentials that are cleared when the switch's address or SNMP port changes.
+- Phase 8 verified on a VSP 8404 with VOSS 8.10.1.0 over the EDM channel (2026-11-06): port
+  VLANs, port name and state, VLAN create/rename/delete, confirm, revert, automatic revert
+  after the deadline and after a restart. SNMP channel and VOSS 7.1 still to be tested.
+- Hybrid ports for VOSS in the configuration planner (`PortVLANs.Hybrid`; the port form's mode
+  "hybrid" needs an untagged VLAN).
+- A confirmed change on VOSS is now saved to NVRAM (`rcSysActionL1` = 7) and ends as
+  `confirmed`, not `confirmed_unsaved`.
+
+### Changed
+
+- EDM session handling moved from `internal/monitor/edmsrc` to `internal/edmsession`, so the
+  dashboard's EDM data source and future configuration changes share one session per switch.
+- The device list has a single *Add switch* button instead of *Add ERS switch* and *Add link*;
+  the kind is chosen in the form.
+- The new-device form takes the switch login (auto-login, SwOS web login, EDM/SwOS data source)
+  together with SNMP access, confirmed with one password entry.
+
 ### Fixed
+
+- SNMP GET requests now carry at most 4 objects (was 10), for agents that silently drop larger
+  requests (Grandstream GWN).
+- A busy switch during the server-side EDM login (HTTP 5xx, such as VOSS's `503 Server Too
+  Busy` when all web sessions are taken) counted as a rejected password: the dashboard's EDM
+  data source then stopped logging in until the login was stored again. It is now a temporary
+  error and the next poll tries again.
+- Setting an empty port name over EDM hung the VSP's web server: empty text is now sent as
+  `0x00:`, as EDM does. Port and VLAN names starting with `0x` are refused.
+- Hybrid ports on VOSS (tagging with "untag default VLAN") showed as trunks on the dashboard;
+  the VOSS driver now reads `rcVlanPortUntagDefaultVlan` and shows them as hybrid.
+- EDM write errors now include the failed variable (`snmpErrorIndex`) and the name of the
+  standard SNMP error status.
 
 - "Open in EDM" for a port left `TypeError` messages in the console on VOSS 8 while EDM was
   still loading; the shim now calls EDM's click handlers directly and keeps such early failures
@@ -71,6 +124,18 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ports; the synthetic `ers5600` fixture now contains such a port.
 
 ### Added
+
+- MikroTik SwOS switches (step 7.14), verified read-only on a CRS305-1G-4S+ with SwOS 2.18:
+  - Device kind `swos`: SwOS's web interface embedded through the proxy. ERS-Proxy logs in with
+    the stored web login (HTTP Digest, `upstream.Options.Login`); the browser never sees the
+    password or a login dialog. The shim maps SwOS's absolute XHR paths below the proxy path.
+  - Port dashboard driver `swos` (detected by `sysObjectID` 1.3.6.1.4.1.14988.2): ports, speed and
+    traffic over SNMP, model, serial number and firmware from MIKROTIK-MIB.
+  - Data source `swos` (`internal/swos`, `internal/monitor/swossrc`): reads SwOS's web API (GET
+    of six read-only files) for VLANs, PVID, tagging, duplex and LAGs, which SwOS's SNMP agent
+    does not provide. Port names follow SwOS (`ETH/BOOT`, `SFP1`, …).
+- The proxy no longer forwards the browser's `Authorization` header to any switch and drops
+  `WWW-Authenticate` from switch answers.
 
 - Browser test `tools/e2e/edm_e2e.py` also runs in Firefox (`E2E_BROWSER=firefox`, geckodriver;
   JavaScript errors through WebDriver BiDi) and WebKitGTK, Safari's engine (`E2E_BROWSER=webkit`,

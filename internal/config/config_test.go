@@ -111,3 +111,31 @@ func TestMonitorRetention(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigureDefaultsAndBounds(t *testing.T) {
+	c := Default()
+	if c.Configure.Enabled || c.Configure.ConfirmTimeout != 2*time.Minute {
+		t.Fatalf("defaults: %+v", c.Configure)
+	}
+	for _, d := range []time.Duration{30 * time.Second, 2 * time.Minute, 30 * time.Minute} {
+		c.Configure.ConfirmTimeout = d
+		if err := c.Validate(); err != nil {
+			t.Errorf("%s rejected: %v", d, err)
+		}
+	}
+	for _, d := range []time.Duration{29 * time.Second, 31 * time.Minute} {
+		c.Configure.ConfirmTimeout = d
+		if err := c.Validate(); err == nil {
+			t.Errorf("%s accepted", d)
+		}
+	}
+}
+
+// Writing to switches can only be enabled in config.yaml.
+func TestConfigureNotEnabledByEnv(t *testing.T) {
+	c := Default()
+	c.ApplyEnv(func(string) string { return "true" }) // every variable set, incl. ERSPROXY_CONFIGURE_ENABLED
+	if c.Configure.Enabled {
+		t.Fatal("environment enabled configure")
+	}
+}

@@ -73,7 +73,7 @@ func Build(ctx context.Context, db *store.DB) (*Export, error) {
 		if d.Proxied() {
 			ed.Isolation = d.Isolation
 		}
-		if d.EDM() {
+		if d.Upstream() {
 			ed.TLSMode, ed.TLSPin = d.TLSMode, d.TLSPin
 		}
 		out.Devices = append(out.Devices, ed)

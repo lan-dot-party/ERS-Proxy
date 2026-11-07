@@ -70,17 +70,20 @@ func Normalize(d *store.Device) error {
 	if d.TLSPin != "" && (len(d.TLSPin) != 64 || strings.Trim(d.TLSPin, "0123456789abcdef") != "") {
 		return fieldErr("tls_pin", "certificate fingerprint must be 64 hex characters (SHA-256)")
 	}
+	if err := normalizeConfigSource(d); err != nil {
+		return err
+	}
 	if err := normalizeMonitoring(d); err != nil {
 		return err
 	}
 	switch d.Kind {
-	case store.KindERS, store.KindVSP:
+	case store.KindERS, store.KindVSP, store.KindSwOS:
 		u, err := normalizeBase(d.URL)
 		if err != nil {
 			return err
 		}
 		d.URL = u
-	case store.KindEDMDirect:
+	case store.KindEDMDirect, store.KindGWN:
 		u, err := normalizeBase(d.URL)
 		if err != nil {
 			return err
@@ -97,7 +100,25 @@ func Normalize(d *store.Device) error {
 		// Isolation and TLS settings only apply to proxied devices.
 		d.Isolation, d.TLSMode, d.TLSPin = store.IsolationSandbox, store.TLSAuto, ""
 	default:
-		return fieldErr("kind", "kind %q: want ers-edm, vsp-edm, edm-direct or link", d.Kind)
+		return fieldErr("kind", "kind %q: want ers-edm, vsp-edm, edm-direct, swos, gwn or link", d.Kind)
+	}
+	return nil
+}
+
+// normalizeConfigSource validates how settings are changed on the switch. It
+// does not look at the global configure.enabled switch; the UI and the manager
+// enforce that.
+func normalizeConfigSource(d *store.Device) error {
+	switch d.ConfigSource {
+	case "":
+		d.ConfigSource = store.ConfigNone
+	case store.ConfigNone, store.ConfigSNMP:
+	case store.ConfigEDM:
+		if !d.EDM() {
+			return fieldErr("config_source", "the EDM configuration source needs a device of kind ers-edm, vsp-edm or edm-direct")
+		}
+	default:
+		return fieldErr("config_source", "config source %q: want none, edm or snmp", d.ConfigSource)
 	}
 	return nil
 }
@@ -114,16 +135,25 @@ func normalizeMonitoring(d *store.Device) error {
 		if !d.EDM() {
 			return fieldErr("monitor_source", "the EDM data source needs a device of kind ers-edm, vsp-edm or edm-direct")
 		}
+	case store.MonitorSwOS:
+		if !d.SwOS() {
+			return fieldErr("monitor_source", "the SwOS data source needs a device of kind swos")
+		}
+	case store.MonitorGWN:
+		if !d.GWN() {
+			return fieldErr("monitor_source", "the GWN data source needs a device of kind gwn")
+		}
 	default:
-		return fieldErr("monitor_source", "monitor source %q: want none, snmp or edm", d.MonitorSource)
+		return fieldErr("monitor_source", "monitor source %q: want none, snmp, edm, swos or gwn", d.MonitorSource)
 	}
 	if d.MonitorDriver == "" {
 		d.MonitorDriver = store.DriverAuto
 	}
 	switch d.MonitorDriver {
-	case store.DriverAuto, store.DriverGeneric, store.DriverERS, store.DriverCisco, store.DriverTPLink, store.DriverVOSS:
+	case store.DriverAuto, store.DriverGeneric, store.DriverERS, store.DriverCisco, store.DriverTPLink, store.DriverVOSS,
+		store.DriverSwOS, store.DriverGWN:
 	default:
-		return fieldErr("monitor_driver", "monitor driver %q: want auto, generic, ers, cisco, tplink or voss", d.MonitorDriver)
+		return fieldErr("monitor_driver", "monitor driver %q: want auto, generic, ers, cisco, tplink, voss, swos or grandstream", d.MonitorDriver)
 	}
 	if d.MonitorInterval == 0 {
 		d.MonitorInterval = DefaultMonitorInterval
@@ -176,7 +206,7 @@ func parseHTTPURL(raw string) (*url.URL, error) {
 }
 
 // normalizeBase returns scheme://host[:port] for a proxied switch. A path is
-// not allowed: EDM always lives at the root of the switch's web server.
+// not allowed: EDM and SwOS always live at the root of the web server.
 func normalizeBase(raw string) (string, error) {
 	u, err := parseHTTPURL(raw)
 	if err != nil {
@@ -297,6 +327,38 @@ func DecryptSNMP(k *secret.Key, d *store.Device) (snmp.Credentials, error) {
 		return snmp.Credentials{}, errors.New("no SNMP credentials stored")
 	}
 	plain, err := k.Decrypt(d.SNMPCredentials, SNMPAAD(d))
+	if err != nil {
+		return snmp.Credentials{}, err
+	}
+	return snmp.UnmarshalCredentials(plain)
+}
+
+// SNMPWriteAAD is the associated data that binds stored SNMP write credentials
+// to a device, its host and its SNMP port. It differs from SNMPAAD, so read
+// and write credentials cannot be swapped.
+func SNMPWriteAAD(d *store.Device) []byte {
+	host, _ := HostPort(d.URL)
+	return []byte("ers-proxy snmp-write|" + fmt.Sprint(d.ID) + "|" + host + "|" + fmt.Sprint(d.SNMPPort))
+}
+
+// EncryptSNMPWrite encrypts SNMP write credentials for d. d.ID must be set.
+func EncryptSNMPWrite(k *secret.Key, d *store.Device, c snmp.Credentials) ([]byte, error) {
+	if d.ID == 0 {
+		return nil, errors.New("device must be saved before SNMP write credentials are stored")
+	}
+	plain, err := c.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	return k.Encrypt(plain, SNMPWriteAAD(d))
+}
+
+// DecryptSNMPWrite opens the SNMP write credentials stored for d.
+func DecryptSNMPWrite(k *secret.Key, d *store.Device) (snmp.Credentials, error) {
+	if !d.HasSNMPWriteCredentials() {
+		return snmp.Credentials{}, errors.New("no SNMP write credentials stored")
+	}
+	plain, err := k.Decrypt(d.SNMPWriteCredentials, SNMPWriteAAD(d))
 	if err != nil {
 		return snmp.Credentials{}, err
 	}

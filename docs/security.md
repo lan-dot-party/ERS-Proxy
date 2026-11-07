@@ -7,7 +7,8 @@ vulnerabilities as described in [SECURITY.md](../SECURITY.md).
 
 - Access to the management interfaces of network switches (configuration changes can take a
   network down).
-- Switch passwords, if stored for auto-login.
+- Switch passwords, if stored for auto-login, and SNMP credentials (read, and write if
+  configuration changes over SNMP are used).
 - The ERS-Proxy accounts and the device list (addresses of management interfaces).
 
 ## Threats
@@ -21,6 +22,7 @@ vulnerabilities as described in [SECURITY.md](../SECURITY.md).
 | T5 | Theft of stored switch passwords | Copy of the database, or redirecting a device to an attacker's host |
 | T6 | Man in the middle between ERS-Proxy and a switch | ARP spoofing in the management network |
 | T7 | Leaking switch sessions | Switch cookies end up in the browser or in logs |
+| T8 | **Misused or mistaken configuration changes** (only with `configure.enabled`) | A stolen admin session moves an uplink into another VLAN; an admin cuts off the management VLAN by mistake; a forged request applies a change the admin never saw |
 
 ## Mitigations
 
@@ -73,7 +75,14 @@ ifIndex checked as a number).
 If a switch's EDM needs a browser feature that the sandbox forbids, an admin can set
 `isolation: off` for that device. The portal then shows a permanent warning for the device.
 
-Devices of kind `vsp-edm` (VSP switches with VOSS) are proxied exactly like ERS switches.
+Devices of kind `vsp-edm` (VSP switches with VOSS) and `swos` (MikroTik SwOS) are proxied
+exactly like ERS switches. For `swos` devices ERS-Proxy also logs in on the server: SwOS uses
+HTTP Digest, and the proxy answers the switch's challenge with the stored web login. The
+browser's own `Authorization` header is never forwarded and the switch's `WWW-Authenticate`
+header never reaches the browser, so neither a browser login dialog nor the password is
+involved in the browser. Content of the sandboxed SwOS page can use the stored login only for
+requests to its own switch below its own token path – which is what opening the device grants
+anyway. Without a stored login a `swos` device is not opened.
 Devices of kind `link` and `edm-direct` (VSP switches opened directly) are not proxied: the browser loads them from their own origin, never under the portal's, so this
 section does not apply to them. For `edm-direct` devices ERS-Proxy only reads from the EDM
 itself (EDM data source) with the pinned certificate and the stored login (T5, T6).
@@ -99,8 +108,12 @@ itself (EDM data source) with the pinned certificate and the stored login (T5, T
   Setting or clearing requires re-entering the user's own password.
 - **SNMPv2c sends the community unencrypted.** Use a read-only community that the switch
   restricts to this host, and prefer SNMPv3 with `authPriv`.
-- ERS-Proxy only reads: `internal/snmp` has no SET API (checked by a test), so a leaked or
-  misused community cannot be used to change a switch through ERS-Proxy.
+- These read credentials are only used for reading: `internal/snmp` has no SET API (checked
+  by a test). Configuration changes over SNMP use separate write credentials (see T8), which
+  exist only when an admin stores them.
+- SNMP write credentials are stored the same way (AES-256-GCM, bound to device ID, host and
+  SNMP port with their own associated data, so read and write ciphertexts cannot be swapped),
+  write-only, need the admin's password, and are deleted when the host or SNMP port changes.
 
 ### Connection to the switch (T6)
 
@@ -111,7 +124,45 @@ itself (EDM data source) with the pinned certificate and the stored login (T5, T
   RSA key exchange, AES-CBC, 3DES, RC4) only if the switch supports nothing better. The device
   page shows the negotiated version and cipher and warns below TLS 1.2.
 - With HTTP the connection is unencrypted, including the EDM login. The portal marks such
-  devices.
+  devices. SwOS speaks HTTP only; its Digest login does not send the password itself, but MD5
+  Digest can be attacked offline from a captured exchange – keep SwOS switches in a management
+  network.
+- The SwOS data source sends only GET requests for six read-only files and never asks for
+  `snmp.b` (which contains the SNMP community); a test checks that the reader contains no write
+  methods.
+
+### Configuration changes (T8)
+
+Changing switch settings from the dashboard ([switch-configuration.md](switch-configuration.md))
+is off by default. Port monitoring alone never writes to a switch.
+
+- **Opt-in in two places.** `configure.enabled: true` must be set in `config.yaml`; no
+  environment variable, command-line flag or UI setting can turn it on (a test checks the
+  environment). Without it the server registers no configuration routes, shows no controls
+  and does not start the manager, which also refuses every operation itself. In addition each
+  device needs a configuration channel (`config_source`: EDM or SNMP); setting it needs the
+  admin's password.
+- **Admins only**, through the same protections as every admin action: session, CSRF token,
+  same-origin check (`Origin: null` is rejected). Nothing in a switch's sandboxed EDM can reach
+  these routes.
+- **What is written is what was shown.** A preview is bound to the user and to a hash of the
+  planned writes; applying takes only the preview ID and the hash. Before writing, the values
+  are read again; if the switch changed since the preview, nothing is written.
+- **Guards.** Warnings for uplinks (LLDP neighbour), LAG/MLT members and the management VLAN
+  need an explicit acknowledgement; when the management VLAN cannot be determined (EDM), every
+  change that could cut the switch off needs it. Deleting VLAN 1 or the management VLAN is
+  refused.
+- **Commit confirmed.** Every change is read back and stays pending until it is confirmed;
+  otherwise it is reverted at the deadline, also after a restart of ERS-Proxy (the plan and
+  the previous values are stored before the first write). The configuration is saved on the
+  switch only after confirmation, so a reboot restores the previous state if a change cut the
+  switch off.
+- **Contained code.** Only `internal/switchcfg` writes to switches; tests check that only the
+  web layer and the server command import it, and that gosnmp's `Set` is called only in its
+  SNMP writer. EDM writes are never retried automatically.
+- **Audit.** Apply, confirm, revert (also automatic ones, as `system`) and failures are in the
+  audit log with a readable summary, never with credentials; each switch also has a change
+  history.
 
 ### Switch sessions (T7)
 
@@ -127,5 +178,11 @@ itself (EDM data source) with the pinned certificate and the stored login (T5, T
   access to the logs.
 - **Legacy TLS.** TLS 1.0 with RC4 or 3DES is weak. Use a management network.
 - **Users can do what EDM allows.** ERS-Proxy does not restrict what a logged-in user does
-  inside a switch's EDM; that is decided by the switch account.
+  inside a switch's EDM; that is decided by the switch account. SwOS has only one account with
+  full rights, so every portal user who can open a `swos` device can change that switch.
 - **`isolation: off`** removes the protection against T4 for that device.
+- **Configuration changes** (with `configure.enabled`): an admin account can change switches
+  through ERS-Proxy, so its password protects the network. A change that cuts ERS-Proxy off
+  from the switch cannot be reverted by ERS-Proxy; only a restart of the switch restores the
+  saved configuration. Confirming a change saves the whole running configuration, including
+  unsaved changes others made on the switch.

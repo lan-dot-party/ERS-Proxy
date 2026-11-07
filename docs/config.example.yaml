@@ -46,6 +46,13 @@ monitor:
     hour: 8760h               # 1-hour resolution (1 year)
     events: 8760h             # link changes etc. (at least 24h)
 
+# Changing switch settings from the dashboard (port VLANs etc.). Writing to
+# switches is off and can only be enabled here, explicitly: no environment
+# variable turns it on. Port monitoring stays read-only either way.
+# configure:
+#   enabled: false
+#   confirm_timeout: 2m       # a change is reverted unless confirmed (30s to 30m)
+
 # Built-in TLS (otherwise use a reverse proxy):
 # tls:
 #   cert_file: /etc/ers-proxy/tls.crt

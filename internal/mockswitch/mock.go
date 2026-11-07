@@ -13,12 +13,15 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"mime"
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -55,6 +58,11 @@ type Options struct {
 	// Data answers the SNMP bridge from an .snmprec file (optional; else the
 	// small built-in Values).
 	Data *SNMPData
+	// MaxSessions limits the logins that are active at the same time
+	// (0 = unlimited). Further logins get "503 Server Too Busy", as VSP
+	// switches answer when their few web sessions are used up. A logout
+	// frees one.
+	MaxSessions int
 }
 
 // Mock is the fake switch web server.
@@ -72,8 +80,14 @@ type Mock struct {
 	// LastClose reports whether the last request asked to close the
 	// connection ("Connection: close", for tests).
 	LastClose bool
-	// Sets records setVariables requests (for tests).
-	Sets []string
+	// Sets records the varNames of setVariables requests (for tests);
+	// SetValues the matching varValues.
+	Sets      []string
+	SetValues []string
+	// SetError, if set, is called with the variable names of every
+	// setVariables request. A non-empty result is sent as the answer and
+	// nothing is applied, e.g. "snmpErrorStatus:10\r\nsnmpErrorIndex:1\r\n".
+	SetError func(names []string) string
 }
 
 // New returns a mock serving root.
@@ -143,6 +157,9 @@ func (m *Mock) get(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, &http.Cookie{Name: "auth", Value: n})
 		m.file(w, r, "login.html")
 		return
+	}
+	if p == "/logout.html" {
+		m.logout(r)
 	}
 	if p == "/" {
 		p = "/index.html"
@@ -222,6 +239,11 @@ func (m *Mock) post(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			m.mu.Lock()
+			if max := m.opts.MaxSessions; max > 0 && !m.sessions[q.Get("nonce")] && len(m.sessions) >= max {
+				m.mu.Unlock()
+				http.Error(w, "Server Too Busy", http.StatusServiceUnavailable)
+				return
+			}
 			m.sessions[q.Get("nonce")] = true
 			m.mu.Unlock()
 			reply(w, "OK")
@@ -239,13 +261,77 @@ func (m *Mock) post(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Not Authorized", http.StatusUnauthorized)
 			return
 		}
-		m.jsp(w, q.Get("command"), q.Get("varNames"))
+		m.jsp(w, q)
 		return
 	}
 	http.Error(w, "not found", http.StatusNotFound)
 }
 
-func (m *Mock) jsp(w http.ResponseWriter, cmd, names string) {
+// logout ends the login of the request's auth cookie.
+func (m *Mock) logout(r *http.Request) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.sessions, m.authCookie(r))
+}
+
+// set answers setVariables: variables are joined with a TAB in varNames and
+// varValues.
+func (m *Mock) set(w http.ResponseWriter, q url.Values) {
+	names, values := q.Get("varNames"), q.Get("varValues")
+	m.mu.Lock()
+	m.Sets = append(m.Sets, names)
+	m.SetValues = append(m.SetValues, values)
+	fail := m.SetError
+	m.mu.Unlock()
+	nl, vl := strings.Split(names, "\t"), strings.Split(values, "\t")
+	if fail != nil {
+		if ans := fail(nl); ans != "" {
+			reply(w, ans)
+			return
+		}
+	}
+	if m.opts.Data == nil {
+		reply(w, setAnswer(nl, vl))
+		return
+	}
+	if len(nl) != len(vl) || q.Get("varCount") != strconv.Itoa(len(nl)) {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	vars := make([]SetVar, len(nl))
+	for i := range nl {
+		vars[i] = SetVar{Name: nl[i], Value: vl[i]}
+	}
+	if err := m.opts.Data.Apply(vars); err != nil {
+		var f *SetFailure
+		if errors.As(err, &f) {
+			// As a VSP answers (VOSS 8.10): status and index, no message.
+			reply(w, fmt.Sprintf("snmpErrorStatus:%d\r\nsnmpErrorIndex:%d\r\n", f.Status, f.Index))
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	reply(w, setAnswer(nl, vl))
+}
+
+// setAnswer is the answer of a VSP to a successful setVariables: each name
+// without its index and the value written, "ifAlias:uplink\r\n".
+func setAnswer(names, values []string) string {
+	var sb strings.Builder
+	for i, n := range names {
+		base, _, _ := strings.Cut(n, ".")
+		v := ""
+		if i < len(values) {
+			v = values[i]
+		}
+		sb.WriteString(base + ":" + v + "\r\n")
+	}
+	return sb.String()
+}
+
+func (m *Mock) jsp(w http.ResponseWriter, q url.Values) {
+	cmd, names := q.Get("command"), q.Get("varNames")
 	if d := m.opts.Data; d != nil {
 		switch cmd {
 		case "getVariables", "getNextVariables":
@@ -287,10 +373,7 @@ func (m *Mock) jsp(w http.ResponseWriter, cmd, names string) {
 		}
 		reply(w, "[]")
 	case "setVariables":
-		m.mu.Lock()
-		m.Sets = append(m.Sets, names)
-		m.mu.Unlock()
-		reply(w, "snmpErrorStatus:0\r\n")
+		m.set(w, q)
 	case "logout":
 		reply(w, "")
 	default:

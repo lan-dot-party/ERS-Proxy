@@ -367,3 +367,120 @@ func TestEDMDirectExportImport(t *testing.T) {
 		t.Fatalf("round trip: %+v", d)
 	}
 }
+
+func TestNormalizeSwOS(t *testing.T) {
+	d := &store.Device{Name: "crs", Kind: store.KindSwOS, URL: "192.0.2.30", MonitorSource: store.MonitorSwOS,
+		MonitorDriver: store.DriverSwOS}
+	if err := Normalize(d); err != nil || d.URL != "http://192.0.2.30" {
+		t.Fatalf("swos: %v %q", err, d.URL)
+	}
+	if !d.Proxied() || !d.Upstream() || d.EDM() || d.Direct() || d.VOSS() || !d.SwOS() {
+		t.Fatal("kind helpers for swos")
+	}
+	if err := Normalize(&store.Device{Name: "x", Kind: store.KindSwOS, URL: "http://192.0.2.30/index.html"}); err == nil {
+		t.Fatal("path accepted")
+	}
+	var fe *FieldError
+	for _, kind := range []string{store.KindERS, store.KindVSP, store.KindEDMDirect, store.KindLink} {
+		x := &store.Device{Name: "x", Kind: kind, URL: "http://192.0.2.31/", MonitorSource: store.MonitorSwOS}
+		if err := Normalize(x); !errors.As(err, &fe) || fe.Key != "monitor_source" {
+			t.Errorf("swos source on %s: %v", kind, err)
+		}
+	}
+	// The EDM source is not available for SwOS switches.
+	x := &store.Device{Name: "x", Kind: store.KindSwOS, URL: "192.0.2.30", MonitorSource: store.MonitorEDM}
+	if err := Normalize(x); !errors.As(err, &fe) || fe.Key != "monitor_source" {
+		t.Fatalf("edm source on swos: %v", err)
+	}
+	for _, kind := range []string{store.KindERS, store.KindVSP, store.KindEDMDirect} {
+		if !(&store.Device{Kind: kind}).Upstream() {
+			t.Errorf("%s: Upstream false", kind)
+		}
+	}
+	if (&store.Device{Kind: store.KindLink}).Upstream() {
+		t.Error("link: Upstream true")
+	}
+}
+
+func TestNormalizeConfigSource(t *testing.T) {
+	for _, c := range []struct {
+		kind, url, src, want, key string
+	}{
+		{store.KindERS, "192.0.2.1", "", store.ConfigNone, ""},
+		{store.KindERS, "192.0.2.1", store.ConfigEDM, store.ConfigEDM, ""},
+		{store.KindEDMDirect, "https://192.0.2.1", store.ConfigEDM, store.ConfigEDM, ""},
+		{store.KindLink, "https://x.example", store.ConfigEDM, "", "config_source"},
+		{store.KindLink, "https://x.example", store.ConfigSNMP, store.ConfigSNMP, ""},
+		{store.KindERS, "192.0.2.1", "ssh", "", "config_source"},
+	} {
+		d := &store.Device{Name: "sw", Kind: c.kind, URL: c.url, ConfigSource: c.src}
+		err := Normalize(d)
+		var fe *FieldError
+		if c.key != "" {
+			if !errors.As(err, &fe) || fe.Key != c.key {
+				t.Errorf("%s/%s: err=%v, want key %s", c.kind, c.src, err, c.key)
+			}
+		} else if err != nil || d.ConfigSource != c.want {
+			t.Errorf("%s/%s: %v %q", c.kind, c.src, err, d.ConfigSource)
+		}
+	}
+}
+
+func TestSNMPWriteCredentialsBound(t *testing.T) {
+	k, err := secret.LoadOrCreate(filepath.Join(t.TempDir(), "k"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &store.Device{ID: 3, URL: "https://192.0.2.10", SNMPPort: 161}
+	if got := string(SNMPWriteAAD(d)); got != "ers-proxy snmp-write|3|192.0.2.10|161" {
+		t.Fatalf("aad %q", got)
+	}
+	enc, err := EncryptSNMPWrite(k, d, snmp.Credentials{Community: "private-rw"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(enc, []byte("private-rw")) {
+		t.Fatal("community stored in plain text")
+	}
+	d.SNMPWriteCredentials = enc
+	c, err := DecryptSNMPWrite(k, d)
+	if err != nil || c.Community != "private-rw" {
+		t.Fatalf("decrypt: %+v %v", c, err)
+	}
+	// Read and write credentials are not interchangeable.
+	asRead := *d
+	asRead.SNMPCredentials = enc
+	if _, err := DecryptSNMP(k, &asRead); err == nil {
+		t.Fatal("write credentials opened as read credentials")
+	}
+	readEnc, err := EncryptSNMP(k, d, snmp.Credentials{Community: "public-ro"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	asWrite := *d
+	asWrite.SNMPWriteCredentials = readEnc
+	if _, err := DecryptSNMPWrite(k, &asWrite); err == nil {
+		t.Fatal("read credentials opened as write credentials")
+	}
+	host := *d
+	host.URL = "https://198.51.100.9"
+	if _, err := DecryptSNMPWrite(k, &host); err == nil {
+		t.Fatal("usable after the host changed")
+	}
+	port := *d
+	port.SNMPPort = 1161
+	if _, err := DecryptSNMPWrite(k, &port); err == nil {
+		t.Fatal("usable after the SNMP port changed")
+	}
+	other := *d
+	other.ID = 4
+	if _, err := DecryptSNMPWrite(k, &other); err == nil {
+		t.Fatal("usable for another device")
+	}
+	if _, err := DecryptSNMPWrite(k, &store.Device{ID: 3}); err == nil {
+		t.Fatal("decrypted without stored credentials")
+	}
+	if _, err := EncryptSNMPWrite(k, &store.Device{URL: "http://x"}, snmp.Credentials{}); err == nil {
+		t.Fatal("encrypted for an unsaved device")
+	}
+}

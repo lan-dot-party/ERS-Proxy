@@ -12,6 +12,7 @@
   </div>
 </div>
 
+{{if .Config}}{{template "config_banner" (dict "C" .Config "P" $)}}{{end}}
 <section class="card">
   <div class="switch-meta">
     {{if .Uptime}}<span>{{$.T "dash.uptime"}}: {{.Uptime}}</span>{{end}}
@@ -98,9 +99,64 @@
 </section>
 {{end}}
 
+{{with .Config}}{{if .VLANAny}}
+<section class="card config-vlans">
+  <h2>{{$.T "config.vlan_mgmt"}}</h2>
+  {{if .Caps.VLANCreate}}
+  <form method="post" action="{{.Base}}/preview" class="form-grid config-form">
+    <input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="kind" value="vlan"><input type="hidden" name="vlan_op" value="create">
+    <label>{{$.T "config.vlan_id"}}<input name="vlan_id" type="number" min="1" max="4094" required class="narrow"></label>
+    <label>{{$.T "config.vlan_name"}}<input name="vlan_name"{{if .MaxVLAN}} maxlength="{{.MaxVLAN}}"{{end}}></label>
+    <div class="actions"><button type="submit" class="primary">{{$.T "config.vlan_create"}}</button></div>
+  </form>
+  {{end}}
+  {{if .VLANs}}
+  <div class="table-wrap"><table class="config-vlan-table">
+    <thead><tr><th>{{$.T "sw.col_vlan"}}</th><th>{{$.T "sw.col_vlan_name"}}</th><th></th></tr></thead>
+    <tbody>
+    {{$c := .}}
+    {{range .VLANs}}<tr>
+      <td>{{.ID}}</td>
+      <td>{{if $c.Caps.VLANRename}}
+        <form method="post" action="{{$c.Base}}/preview" class="inline">
+          <input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="kind" value="vlan"><input type="hidden" name="vlan_op" value="rename"><input type="hidden" name="vlan_id" value="{{.ID}}">
+          <input name="vlan_name" value="{{.Name}}"{{if $c.MaxVLAN}} maxlength="{{$c.MaxVLAN}}"{{end}} aria-label="{{$.T "config.vlan_name"}}">
+          <button type="submit">{{$.T "config.rename"}}</button>
+        </form>{{else}}{{.Name}}{{end}}</td>
+      <td>{{if $c.Caps.VLANDelete}}
+        <form method="post" action="{{$c.Base}}/preview" class="inline" data-confirm="{{$.T "config.delete_confirm"}}">
+          <input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="kind" value="vlan"><input type="hidden" name="vlan_op" value="delete"><input type="hidden" name="vlan_id" value="{{.ID}}">
+          <button type="submit" class="danger">{{$.T "config.delete"}}</button>
+        </form>{{end}}</td>
+    </tr>{{end}}
+    </tbody>
+  </table></div>
+  {{end}}
+</section>
+{{end}}{{end}}
+
 <section class="card">
   <h2>{{$.T "sw.events"}}</h2>
   {{template "events" (dict "Events" .Events "P" $)}}
 </section>
+{{with .Config}}{{if .ShowHist}}
+<section class="card config-history">
+  <h2>{{$.T "config.history"}}</h2>
+  {{if .History}}
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{$.T "config.col_time"}}</th><th>{{$.T "config.col_actor"}}</th><th>{{$.T "config.col_state"}}</th><th>{{$.T "config.col_summary"}}</th><th>{{$.T "config.col_error"}}</th></tr></thead>
+    <tbody>
+    {{range .History}}<tr>
+      <td class="nowrap"><time class="ts" data-ts="{{.At.Unix}}">{{.At.Format "2006-01-02 15:04:05"}}</time></td>
+      <td>{{.Actor}}</td>
+      <td>{{$.T (print "config.state." .State)}}</td>
+      <td>{{.Summary}}</td>
+      <td class="err">{{.Err}}</td>
+    </tr>{{end}}
+    </tbody>
+  </table></div>
+  {{else}}<p class="muted small">{{$.T "config.history_empty"}}</p>{{end}}
+</section>
+{{end}}{{end}}
 {{end}}
 {{end}}

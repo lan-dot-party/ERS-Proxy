@@ -1,5 +1,6 @@
 {{define "content"}}
 <section class="card empty">
+  {{with .Data}}<p><a class="button" href="{{.}}">{{$.T "config.back"}}</a></p>{{end}}
   <p><a href="/">{{.T "nav.workspace"}}</a></p>
 </section>
 {{end}}

@@ -83,7 +83,7 @@ func (ERS) Collect(ctx context.Context, r monitor.Reader) (*monitor.Snapshot, er
 		snap.Notes = append(snap.Notes, fmt.Sprintf("ERS port numbering of stack units 2-8 (%d ifIndexes per unit) follows the EDM code; verified on a single unit only", ppu))
 	}
 	ersPortExtras(ctx, r, snap)
-	if err := ersVLANs(ctx, r, snap); err != nil {
+	if err := ersVLANs(ctx, r, snap, false); err != nil {
 		snap.Notes = append(snap.Notes, "VLANs: "+err.Error())
 	}
 	ersMLT(ctx, r, snap)
@@ -152,7 +152,11 @@ func atoiIdx(idx string) int {
 	return 0
 }
 
-func ersVLANs(ctx context.Context, r monitor.Reader, snap *monitor.Snapshot) error {
+// ersVLANs reads VLANs, PVIDs and tagging. untagDefault is set for VOSS, which
+// has no untagPvidOnly value but a separate rcVlanPortUntagDefaultVlan: a
+// tagging port with it set sends its PVID untagged (CLI
+// "untag-port-default-vlan"), so it is read as untagPvidOnly.
+func ersVLANs(ctx context.Context, r monitor.Reader, snap *monitor.Snapshot, untagDefault bool) error {
 	vlans, err := r.Columns(ctx, "rcVlanName", "rcVlanPortMembers")
 	if err != nil {
 		return err
@@ -169,6 +173,17 @@ func ersVLANs(ctx context.Context, r monitor.Reader, snap *monitor.Snapshot) err
 		}
 		p.PVID, _ = row["rcVlanPortDefaultVlanId"].AsInt()
 		tagging[p.IfIndex], _ = row["rcVlanPortPerformTagging"].AsInt()
+	}
+	if untagDefault {
+		// Optional: without it, such ports look like trunks.
+		if t, err := r.Columns(ctx, "rcVlanPortUntagDefaultVlan"); err == nil {
+			for idx, row := range t {
+				i := atoiIdx(idx)
+				if v, _ := row["rcVlanPortUntagDefaultVlan"].AsInt(); v == 1 && tagging[i] == 1 {
+					tagging[i] = 4
+				}
+			}
+		}
 	}
 	for idx, row := range vlans {
 		vid := atoiIdx(idx)

@@ -60,6 +60,8 @@ type Config struct {
 	UI UI `yaml:"ui"`
 	// Monitor configures port monitoring (history retention).
 	Monitor Monitor `yaml:"monitor"`
+	// Configure controls changing switch settings from the dashboard.
+	Configure Configure `yaml:"configure"`
 
 	// dir is the directory of the loaded file; relative paths resolve against it.
 	dir string
@@ -117,6 +119,14 @@ type UI struct {
 	// DefaultOpenMode is used for users and devices that do not choose one:
 	// embedded (tab inside the portal), tab (new browser tab) or window (popup).
 	DefaultOpenMode string `yaml:"default_open_mode"`
+}
+
+// Configure controls writing to switches.
+type Configure struct {
+	// Enabled allows changing switch settings from the dashboard. Off by default; only config.yaml can turn it on (no environment variable).
+	Enabled bool `yaml:"enabled"`
+	// ConfirmTimeout is how long a change waits for confirmation before it is reverted.
+	ConfirmTimeout time.Duration `yaml:"confirm_timeout"`
 }
 
 // Monitor configures port monitoring.
@@ -194,6 +204,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.UI.DefaultOpenMode == "" {
 		c.UI.DefaultOpenMode = OpenEmbedded
+	}
+	if c.Configure.ConfirmTimeout == 0 {
+		c.Configure.ConfirmTimeout = 2 * time.Minute
 	}
 	if c.Monitor.Retention.Minute == 0 {
 		c.Monitor.Retention.Minute = 48 * time.Hour
@@ -289,6 +302,9 @@ func (c *Config) Validate() error {
 	if !ValidOpenMode(c.UI.DefaultOpenMode) {
 		errs = append(errs, fmt.Errorf("ui.default_open_mode %q: want embedded, tab or window", c.UI.DefaultOpenMode))
 	}
+	if c.Configure.ConfirmTimeout < 30*time.Second || c.Configure.ConfirmTimeout > 30*time.Minute {
+		errs = append(errs, errors.New("configure.confirm_timeout must be between 30s and 30m"))
+	}
 	r := c.Monitor.Retention
 	if r.Minute < time.Hour {
 		errs = append(errs, errors.New("monitor.retention.minute must be at least 1h"))
@@ -376,6 +392,13 @@ monitor:
     quarter: 720h             # 15-minute resolution (30 days)
     hour: 8760h               # 1-hour resolution (1 year)
     events: 8760h             # link changes etc. (at least 24h)
+
+# Changing switch settings from the dashboard (port VLANs etc.). Writing to
+# switches is off and can only be enabled here, explicitly: no environment
+# variable turns it on. Port monitoring stays read-only either way.
+# configure:
+#   enabled: false
+#   confirm_timeout: 2m       # a change is reverted unless confirmed (30s to 30m)
 
 # Built-in TLS (otherwise use a reverse proxy):
 # tls:

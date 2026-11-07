@@ -96,10 +96,14 @@ var Objects = map[string]string{
 	"vmVlan":                      "1.3.6.1.4.1.9.9.68.1.2.2.1.2",
 
 	// Avaya/Nortel ERS (RAPID-CITY, S5-CHASSIS); from the firmware's agent table
-	"rcVlanName":                  "1.3.6.1.4.1.2272.1.3.2.1.2",
-	"rcVlanPortMembers":           "1.3.6.1.4.1.2272.1.3.2.1.11",
-	"rcVlanPortDefaultVlanId":     "1.3.6.1.4.1.2272.1.3.3.1.7",
-	"rcVlanPortPerformTagging":    "1.3.6.1.4.1.2272.1.3.3.1.8",
+	"rcVlanName":               "1.3.6.1.4.1.2272.1.3.2.1.2",
+	"rcVlanPortMembers":        "1.3.6.1.4.1.2272.1.3.2.1.11",
+	"rcVlanStgId":              "1.3.6.1.4.1.2272.1.3.2.1.9",
+	"rcVlanType":               "1.3.6.1.4.1.2272.1.3.2.1.10",
+	"rcVlanPortDefaultVlanId":  "1.3.6.1.4.1.2272.1.3.3.1.7",
+	"rcVlanPortPerformTagging": "1.3.6.1.4.1.2272.1.3.3.1.8",
+	// VOSS only: TruthValue, 1 = a tagging port sends its PVID untagged.
+	"rcVlanPortUntagDefaultVlan":  "1.3.6.1.4.1.2272.1.3.3.1.13",
 	"rcPortOperDuplex":            "1.3.6.1.4.1.2272.1.4.10.1.1.13",
 	"rcPortOperSpeed":             "1.3.6.1.4.1.2272.1.4.10.1.1.15",
 	"rcMltName":                   "1.3.6.1.4.1.2272.1.17.10.1.2",
@@ -109,15 +113,26 @@ var Objects = map[string]string{
 	"s5ChasComVer":                "1.3.6.1.4.1.45.1.6.3.3.1.1.6",
 	"s5ChasComSerNum":             "1.3.6.1.4.1.45.1.6.3.3.1.1.7",
 	"s5ChasComRunningSoftwareVer": "1.3.6.1.4.1.45.1.6.3.3.1.1.19",
+	// MIKROTIK-MIB scalars (RouterOS and SwOS)
+	"mtxrSerialNumber":    "1.3.6.1.4.1.14988.1.1.7.3",
+	"mtxrFirmwareVersion": "1.3.6.1.4.1.14988.1.1.7.4",
+	// IP-MIB ipAddrTable: interfaces with an IP address (read by
+	// internal/switchcfg to find the management VLAN)
+	"ipAdEntIfIndex": "1.3.6.1.2.1.4.20.1.2",
 	// RAPID-CITY scalars of VSP/VOSS switches
 	"rcSysVersion":       "1.3.6.1.4.1.2272.1.1.7",
 	"rcChasSerialNumber": "1.3.6.1.4.1.2272.1.4.2",
+	// Grandstream GWN switch scalars below 1.3.6.1.4.1.42397.1.3.1 (no public
+	// MIB; names chosen here, meaning seen on a GWN7721)
+	"gwnProductModel":    "1.3.6.1.4.1.42397.1.3.1.1",
+	"gwnFirmwareVersion": "1.3.6.1.4.1.42397.1.3.1.4",
 }
 
 // Scalar reports whether a name is a scalar object (read with ".0").
 func Scalar(name string) bool {
 	switch name {
-	case "sysDescr", "sysObjectID", "sysUpTime", "sysName", "sysLocation", "rcSysVersion", "rcChasSerialNumber":
+	case "sysDescr", "sysObjectID", "sysUpTime", "sysName", "sysLocation", "rcSysVersion", "rcChasSerialNumber",
+		"mtxrSerialNumber", "mtxrFirmwareVersion", "gwnProductModel", "gwnFirmwareVersion":
 		return true
 	}
 	return false

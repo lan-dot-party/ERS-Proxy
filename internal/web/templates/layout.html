@@ -75,3 +75,30 @@
 {{else}}<p class="muted small">{{.P.T "sw.no_events"}}</p>{{end}}
 {{end}}
 
+
+{{define "config_banner"}}
+{{$p := .P}}{{with .C}}{{with .Banner}}
+{{if eq .Kind "pending"}}
+<div class="alert alert-warn config-banner" role="status">
+  <p><strong>{{$p.T "config.banner.pending"}} <span class="config-countdown" data-deadline="{{.Deadline}}">{{.Remaining}}</span></strong></p>
+  <p class="small">{{.Summary}} · {{$p.T "config.banner.by"}} {{.Actor}}</p>
+  <div class="config-actions">
+    <form method="post" action="{{.ConfirmURL}}"><input type="hidden" name="_csrf" value="{{$p.CSRF}}"><button type="submit" class="primary">{{$p.T "config.confirm"}}</button></form>
+    <form method="post" action="{{.RevertURL}}"><input type="hidden" name="_csrf" value="{{$p.CSRF}}"><button type="submit">{{$p.T "config.revert"}}</button></form>
+  </div>
+</div>
+{{else if eq .Kind "revert_failed"}}
+<div class="alert alert-error config-banner" role="alert">
+  <p><strong>{{$p.T "config.banner.revert_failed"}}</strong></p>
+  <p class="small">{{.Summary}} · {{$p.T "config.banner.by"}} {{.Actor}}</p>
+  {{if .Err}}<p class="small">{{$p.T "dash.error"}}: {{.Err}}</p>{{end}}
+</div>
+{{else if eq .Kind "busy"}}
+<div class="alert alert-warn config-banner" role="status"><p>{{$p.T "config.banner.busy"}}</p><p class="small">{{.Summary}} · {{$p.T "config.banner.by"}} {{.Actor}}</p></div>
+{{else if eq .Kind "unsaved"}}
+<div class="alert alert-warn config-banner" role="status"><p>{{$p.T "config.banner.unsaved"}}</p><p class="small">{{.Summary}} · {{$p.T "config.banner.by"}} {{.Actor}}</p></div>
+{{else if eq .Kind "failed"}}
+<div class="alert alert-error config-banner" role="alert"><p>{{$p.T "config.banner.failed"}}</p><p class="small">{{.Summary}} · {{$p.T "config.banner.by"}} {{.Actor}}</p>{{if .Err}}<p class="small">{{$p.T "dash.error"}}: {{.Err}}</p>{{end}}</div>
+{{end}}
+{{end}}{{end}}
+{{end}}

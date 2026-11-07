@@ -152,7 +152,7 @@ func (c *Checker) Round(ctx context.Context) {
 
 func (c *Checker) check(ctx context.Context, d *store.Device) Status {
 	st := Status{State: StateDown, Embeddable: true, Checked: time.Now()}
-	if !d.EDM() {
+	if !d.Upstream() {
 		return c.checkLink(ctx, d, st)
 	}
 	host, port := devices.HostPort(d.URL)

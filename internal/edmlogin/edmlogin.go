@@ -25,7 +25,19 @@ var (
 	ErrChangePassword = errors.New("the switch requires a password change; log in once in EDM yourself")
 	ErrNoNonce        = errors.New("the switch did not set the auth cookie")
 	ErrTooLong        = errors.New("EDM accepts at most 15 characters for user name and password")
+	// ErrUnavailable is a server error (HTTP 5xx) during the login, such as
+	// VOSS's "503 Server Too Busy" when all web sessions are taken. It says
+	// nothing about the password, so callers may try again later.
+	ErrUnavailable = errors.New("the switch's web server is busy or unavailable; trying again later")
 )
+
+// unavailable reports a server error answer.
+func unavailable(resp *http.Response) error {
+	if resp.StatusCode >= 500 {
+		return fmt.Errorf("%w (HTTP %d %s)", ErrUnavailable, resp.StatusCode, http.StatusText(resp.StatusCode))
+	}
+	return nil
+}
 
 // Cookies stores the switch's cookies between requests.
 type Cookies interface {
@@ -78,9 +90,12 @@ func Login(ctx context.Context, rt http.RoundTripper, base string, jar Cookies, 
 		return resp, data, nil
 	}
 
-	_, page, err := do(http.MethodGet, "", "")
+	resp, page, err := do(http.MethodGet, "", "")
 	if err != nil {
 		return fmt.Errorf("load login page: %w", err)
+	}
+	if err := unavailable(resp); err != nil {
+		return err
 	}
 	nonce := jar.Value("auth")
 	voss := Style(page) == StyleVOSS
@@ -94,6 +109,9 @@ func Login(ctx context.Context, rt http.RoundTripper, base string, jar Cookies, 
 		resp, body, err := do(http.MethodPost, "application/x-www-form-urlencoded", form.Encode())
 		if err != nil {
 			return fmt.Errorf("login submit: %w", err)
+		}
+		if err := unavailable(resp); err != nil {
+			return err
 		}
 		switch {
 		case resp.StatusCode == 205:
@@ -112,6 +130,9 @@ func Login(ctx context.Context, rt http.RoundTripper, base string, jar Cookies, 
 	if err != nil {
 		return fmt.Errorf("login check: %w", err)
 	}
+	if err := unavailable(resp); err != nil {
+		return err
+	}
 	switch {
 	case resp.StatusCode == 205:
 		return ErrChangePassword
@@ -124,6 +145,9 @@ func Login(ctx context.Context, rt http.RoundTripper, base string, jar Cookies, 
 	resp, body, err = do(http.MethodPost, "application/x-www-form-urlencoded", form.Encode())
 	if err != nil {
 		return fmt.Errorf("login submit: %w", err)
+	}
+	if err := unavailable(resp); err != nil {
+		return err
 	}
 	if resp.StatusCode >= 400 || authFailed(body) {
 		return fmt.Errorf("%w (HTTP %d)", ErrRejected, resp.StatusCode)

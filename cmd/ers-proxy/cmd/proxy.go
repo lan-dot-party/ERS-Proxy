@@ -13,8 +13,10 @@ import (
 	"github.com/lan-dot-party/ers-proxy/internal/edmproxy"
 	"github.com/lan-dot-party/ers-proxy/internal/monitor"
 	"github.com/lan-dot-party/ers-proxy/internal/monitor/edmsrc"
+	"github.com/lan-dot-party/ers-proxy/internal/monitor/swossrc"
 	"github.com/lan-dot-party/ers-proxy/internal/secret"
 	"github.com/lan-dot-party/ers-proxy/internal/store"
+	"github.com/lan-dot-party/ers-proxy/internal/swos"
 	"github.com/lan-dot-party/ers-proxy/internal/web"
 )
 
@@ -34,22 +36,32 @@ type edmEntry struct {
 
 // open implements poller.OpenFunc.
 func (e *edmSessions) open(ctx context.Context, d *store.Device) (monitor.Reader, func(), error) {
+	s, err := e.session(ctx, d)
+	if err != nil {
+		return nil, nil, err
+	}
+	return edmsrc.Reader{S: s}, func() {}, nil
+}
+
+// session returns the device's shared EDM session, creating it (and logging
+// out a session that settings changes made obsolete) when needed.
+func (e *edmSessions) session(ctx context.Context, d *store.Device) (*edmsrc.Session, error) {
 	if !d.EDM() {
-		return nil, nil, errors.New("the EDM data source needs an EDM switch (kind ers-edm, vsp-edm or edm-direct)")
+		return nil, errors.New("the EDM data source needs an EDM switch (kind ers-edm, vsp-edm or edm-direct)")
 	}
 	if !d.HasCredentials() {
-		return nil, nil, errors.New("the EDM data source needs a stored EDM login (device settings)")
+		return nil, errors.New("the EDM data source needs a stored EDM login (device settings)")
 	}
 	c, err := e.proxy.Client(d)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	sig := fmt.Sprintf("%s|%s|%x", d.URL, d.TLSPin, d.Credentials)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	ent, ok := e.m[d.ID]
 	if ok && ent.sig == sig {
-		return edmsrc.Reader{S: ent.s}, func() {}, nil
+		return ent.s, nil
 	}
 	if ok {
 		// Settings or login changed: free the old session on the switch.
@@ -61,17 +73,37 @@ func (e *edmSessions) open(ctx context.Context, d *store.Device) (monitor.Reader
 	}
 	cred, err := devices.DecryptCredentials(e.key, d)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	s := edmsrc.NewSession(c.Transport, c.Base().String(), cred.Username, cred.Password)
 	e.m[d.ID] = edmEntry{sig: sig, s: s}
-	return edmsrc.Reader{S: s}, func() {}, nil
+	return s, nil
 }
 
 // newProxy builds the EDM proxy and connects it to the UI.
-func newEDMSource(p *edmproxy.Proxy, key *secret.Key) func(ctx context.Context, d *store.Device) (monitor.Reader, func(), error) {
-	e := &edmSessions{proxy: p, key: key, m: map[int64]edmEntry{}}
-	return e.open
+// It also serves the EDM channel of configuration changes, so both share one
+// session per switch.
+func newEDMSource(p *edmproxy.Proxy, key *secret.Key) *edmSessions {
+	return &edmSessions{proxy: p, key: key, m: map[int64]edmEntry{}}
+}
+
+// newSwOSSource returns the poller.OpenFunc of the SwOS data source. It uses
+// the proxy's client of the device, which logs in with the stored web login
+// (HTTP Digest); SwOS has no sessions to keep.
+func newSwOSSource(p *edmproxy.Proxy) func(ctx context.Context, d *store.Device) (monitor.Reader, func(), error) {
+	return func(_ context.Context, d *store.Device) (monitor.Reader, func(), error) {
+		if !d.SwOS() {
+			return nil, nil, errors.New("the SwOS data source needs a device of kind swos")
+		}
+		if !d.HasCredentials() {
+			return nil, nil, errors.New("the SwOS data source needs a stored web login (device settings)")
+		}
+		c, err := p.Client(d)
+		if err != nil {
+			return nil, nil, err
+		}
+		return &swossrc.Reader{C: &swos.Client{Transport: c.Transport, Base: c.Base().String()}}, func() {}, nil
+	}
 }
 
 func newProxy(ctx context.Context, a *app.App, ui *web.Server) (*edmproxy.Proxy, error) {

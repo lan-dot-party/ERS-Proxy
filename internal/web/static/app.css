@@ -209,6 +209,7 @@ input[aria-invalid="true"] { border-color: var(--err); }
 form.device-kind-link .ers-only { display: none; }
 form.device-kind-edm-direct .proxy-only { display: none; }
 form:not(.device-kind-edm-direct) .direct-only { display: none; }
+form.device-kind-gwn .not-gwn, form:not(.device-kind-gwn) .gwn-only { display: none; }
 .snmp-v2c .snmp-v3-only, .snmp-v3 .snmp-v2c-only { display: none; }
 .snmp-level-noAuthNoPriv .snmp-auth, .snmp-level-noAuthNoPriv .snmp-priv,
 .snmp-level-authNoPriv .snmp-priv { display: none; }
@@ -360,3 +361,18 @@ svg.chart .hover-dot-out { fill: var(--c-out); stroke: var(--surface); stroke-wi
 .swatch-in { background: #1c7ed6; }
 .swatch-out { background: #e8590c; }
 .grid-2 { align-items: start; }
+
+/* Changing switch settings (only rendered when configure.enabled is set). */
+.config-banner { display: grid; gap: .35rem; }
+.config-banner p { margin: 0; }
+.config-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .25rem; }
+.config-actions form { margin: 0; }
+.config-countdown { font-variant-numeric: tabular-nums; }
+.config-vlan-checks { display: flex; flex-wrap: wrap; gap: .25rem 1rem; max-height: 14rem; overflow: auto; }
+.config-form[data-mode="access"] .config-tagged, .config-form[data-mode="keep"] .config-tagged,
+.config-form[data-mode="keep"] .config-untagged, .config-form[data-mode="trunk"] .config-untagged { display: none; }
+.config-preview code { white-space: normal; word-break: break-all; }
+.config-warnings li { color: var(--warn); }
+.config-apply { display: grid; gap: .75rem; }
+.config-vlans form.inline input { max-width: 16rem; }
+.config-history td.err { font-weight: normal; }

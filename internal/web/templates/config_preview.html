@@ -1,0 +1,36 @@
+{{define "content"}}
+{{with .Data}}
+<p class="small"><a href="{{.Base}}">← {{.Name}}</a></p>
+<h1>{{$.T "config.preview_title"}}</h1>
+<p class="muted">{{$.T "config.preview_intro"}}</p>
+
+<section class="card config-preview">
+  <h2>{{$.T "config.summary"}}</h2>
+  <ul>{{range .Summary}}<li>{{.}}</li>{{end}}</ul>
+  <h2>{{$.T "config.steps"}}</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{$.T "config.step"}}</th><th>{{$.T "config.values"}}</th></tr></thead>
+    <tbody>{{range .Steps}}<tr><td>{{.Description}}</td><td>{{range .Sets}}<code>{{.}}</code><br>{{end}}</td></tr>{{end}}</tbody>
+  </table></div>
+</section>
+
+{{if .Warnings}}
+<section class="card notice config-warnings">
+  <h2>{{$.T "config.warnings"}}</h2>
+  <ul>{{range .Warnings}}<li>{{.}}</li>{{end}}</ul>
+</section>
+{{end}}
+{{if not .SaveKnown}}<p class="alert alert-warn">{{$.T "config.nosave"}}</p>{{end}}
+<p class="muted small">{{$.T "config.timeout_note" .Timeout}}</p>
+<p class="muted small">{{$.T "config.cut_off"}}</p>
+
+<form method="post" action="{{.Base}}/configure/apply" class="config-apply">
+  <input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="preview" value="{{.PreviewID}}"><input type="hidden" name="hash" value="{{.Hash}}">
+  {{if .Warnings}}<label class="check"><input type="checkbox" name="ack" value="1" required> {{$.T "config.ack"}}</label>{{end}}
+  <div class="actions">
+    <button type="submit" class="primary">{{$.T "config.apply"}}</button>
+    <a class="button" href="{{.Base}}">{{$.T "config.cancel"}}</a>
+  </div>
+</form>
+{{end}}
+{{end}}

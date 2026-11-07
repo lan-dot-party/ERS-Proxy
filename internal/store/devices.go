@@ -21,6 +21,14 @@ const (
 	// (VSP with VOSS): the browser opens it directly like a link, while the
 	// server still talks to its EDM for the dashboard's EDM data source.
 	KindEDMDirect = "edm-direct"
+	// KindSwOS is a MikroTik switch with SwOS whose web interface is served
+	// through the proxy; the proxy logs in with the stored web login (HTTP
+	// Digest), the browser never sees the password.
+	KindSwOS = "swos"
+	// KindGWN is a Grandstream GWN switch: the browser opens its web interface
+	// directly (like edm-direct), while the server reads its web API with the
+	// stored login for the dashboard's "gwn" data source.
+	KindGWN = "gwn"
 )
 
 // Isolation modes for proxied devices.
@@ -41,6 +49,11 @@ const (
 	MonitorNone = "none"
 	MonitorSNMP = "snmp"
 	MonitorEDM  = "edm"
+	// MonitorSwOS reads SwOS's web API (swos devices only).
+	MonitorSwOS = "swos"
+	// MonitorGWN reads the web API of a Grandstream GWN switch, plus its SNMP
+	// agent for counters when SNMP credentials are stored (gwn devices only).
+	MonitorGWN = "gwn"
 )
 
 // Monitoring drivers.
@@ -51,12 +64,21 @@ const (
 	DriverCisco   = "cisco"
 	DriverTPLink  = "tplink"
 	DriverVOSS    = "voss"
+	DriverSwOS    = "swos"
+	DriverGWN     = "grandstream"
 )
 
 // SNMP versions.
 const (
 	SNMPv2c = "v2c"
 	SNMPv3  = "v3"
+)
+
+// Configuration sources: how the proxy changes settings on a switch.
+const (
+	ConfigNone = "none"
+	ConfigEDM  = "edm"
+	ConfigSNMP = "snmp"
 )
 
 // OpenInherit means: use the user's or the global default open mode.
@@ -92,7 +114,7 @@ type Device struct {
 	HealthEnabled bool
 	Notes         string
 	Sort          int
-	// MonitorSource is none, snmp or edm; MonitorDriver auto, generic, ers, cisco or tplink.
+	// MonitorSource is none, snmp, edm, swos or gwn; MonitorDriver auto or a driver name.
 	MonitorSource   string
 	MonitorDriver   string
 	MonitorInterval int // seconds
@@ -100,9 +122,16 @@ type Device struct {
 	SNMPPort        int
 	// SNMPCredentials is the encrypted community or v3 login (nil = none stored).
 	SNMPCredentials []byte
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	// ConfigSource is how settings on the switch are changed: none, edm or snmp.
+	ConfigSource string
+	// SNMPWriteCredentials is the encrypted SNMP write community or v3 login (nil = none stored).
+	SNMPWriteCredentials []byte
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
+
+// HasSNMPWriteCredentials reports whether SNMP write credentials are stored.
+func (d *Device) HasSNMPWriteCredentials() bool { return len(d.SNMPWriteCredentials) > 0 }
 
 // HasCredentials reports whether a login is stored.
 func (d *Device) HasCredentials() bool { return len(d.Credentials) > 0 }
@@ -110,26 +139,44 @@ func (d *Device) HasCredentials() bool { return len(d.Credentials) > 0 }
 // HasSNMPCredentials reports whether SNMP credentials are stored.
 func (d *Device) HasSNMPCredentials() bool { return len(d.SNMPCredentials) > 0 }
 
-// Proxied reports whether the device is served through the EDM proxy.
-func (d *Device) Proxied() bool { return d.Kind == KindERS || d.Kind == KindVSP }
+// Proxied reports whether the device is served through the proxy (ers-edm,
+// vsp-edm and swos).
+func (d *Device) Proxied() bool { return d.Kind == KindERS || d.Kind == KindVSP || d.Kind == KindSwOS }
 
 // VOSS reports whether the device runs VOSS (vsp-edm and edm-direct): its
 // web server resets connections it is asked to close.
 func (d *Device) VOSS() bool { return d.Kind == KindVSP || d.Kind == KindEDMDirect }
 
-// Direct reports whether the browser opens the device by its URL (link and
-// edm-direct devices).
-func (d *Device) Direct() bool { return d.Kind == KindLink || d.Kind == KindEDMDirect }
+// Direct reports whether the browser opens the device by its URL (link,
+// edm-direct and gwn devices).
+func (d *Device) Direct() bool {
+	return d.Kind == KindLink || d.Kind == KindEDMDirect || d.Kind == KindGWN
+}
 
-// EDM reports whether the server talks to the device's EDM: TLS settings,
-// certificate pin, stored login and the EDM data source apply (ers-edm,
-// vsp-edm and edm-direct devices).
-func (d *Device) EDM() bool { return d.Proxied() || d.Kind == KindEDMDirect }
+// EDM reports whether the device has an EDM: the EDM data source and "Open
+// in EDM" for a port apply (ers-edm, vsp-edm and edm-direct devices).
+func (d *Device) EDM() bool { return d.Kind == KindERS || d.Kind == KindVSP || d.Kind == KindEDMDirect }
+
+// Upstream reports whether the server talks to the device's web server
+// itself: TLS settings, the certificate pin and the stored login apply
+// (proxied devices, edm-direct and gwn).
+func (d *Device) Upstream() bool { return d.Proxied() || d.Kind == KindEDMDirect || d.Kind == KindGWN }
+
+// AlwaysTab reports whether the device is opened directly but never in a
+// frame (edm-direct, gwn): framed, the browser treats the switch as a third
+// party and hides certificate warnings and its login.
+func (d *Device) AlwaysTab() bool { return d.Kind == KindEDMDirect || d.Kind == KindGWN }
+
+// GWN reports whether the device is a Grandstream GWN switch.
+func (d *Device) GWN() bool { return d.Kind == KindGWN }
+
+// SwOS reports whether the device is a MikroTik switch with SwOS.
+func (d *Device) SwOS() bool { return d.Kind == KindSwOS }
 
 const deviceCols = `d.id, COALESCE(d.group_id, 0), COALESCE(g.name, ''), d.name, d.kind, d.url, d.open_mode, d.isolation,
 	d.tls_mode, d.tls_pin, d.tls_profile, d.credentials, d.auto_login, d.health_enabled, d.notes, d.sort,
 	d.monitor_source, d.monitor_driver, d.monitor_interval, d.snmp_version, d.snmp_port, d.snmp_credentials,
-	d.created_at, d.updated_at`
+	d.config_source, d.snmp_write_credentials, d.created_at, d.updated_at`
 
 const deviceFrom = ` FROM devices d LEFT JOIN device_groups g ON g.id = d.group_id`
 
@@ -139,7 +186,7 @@ func scanDevice(row interface{ Scan(...any) error }) (*Device, error) {
 	err := row.Scan(&d.ID, &d.GroupID, &d.GroupName, &d.Name, &d.Kind, &d.URL, &d.OpenMode, &d.Isolation,
 		&d.TLSMode, &d.TLSPin, &d.TLSProfile, &d.Credentials, &d.AutoLogin, &d.HealthEnabled, &d.Notes, &d.Sort,
 		&d.MonitorSource, &d.MonitorDriver, &d.MonitorInterval, &d.SNMPVersion, &d.SNMPPort, &d.SNMPCredentials,
-		&created, &updated)
+		&d.ConfigSource, &d.SNMPWriteCredentials, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -163,11 +210,11 @@ func (db *DB) CreateDevice(ctx context.Context, d *Device) error {
 	d.UpdatedAt = d.CreatedAt
 	res, err := db.sql.ExecContext(ctx, `INSERT INTO devices (group_id, name, kind, url, open_mode, isolation, tls_mode,
 		tls_pin, tls_profile, credentials, auto_login, health_enabled, notes, sort, monitor_source, monitor_driver, monitor_interval, snmp_version, snmp_port,
-		snmp_credentials, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		snmp_credentials, config_source, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		nullID(d.GroupID), d.Name, d.Kind, d.URL, d.OpenMode, d.Isolation, d.TLSMode, d.TLSPin, d.TLSProfile,
 		d.Credentials, boolInt(d.AutoLogin), boolInt(d.HealthEnabled), d.Notes, d.Sort,
-		d.MonitorSource, d.MonitorDriver, d.MonitorInterval, d.SNMPVersion, d.SNMPPort, d.SNMPCredentials, unix(d.CreatedAt), unix(d.UpdatedAt))
+		d.MonitorSource, d.MonitorDriver, d.MonitorInterval, d.SNMPVersion, d.SNMPPort, d.SNMPCredentials, configSource(d.ConfigSource), unix(d.CreatedAt), unix(d.UpdatedAt))
 	if err != nil {
 		return err
 	}
@@ -181,10 +228,10 @@ func (db *DB) UpdateDevice(ctx context.Context, d *Device) error {
 	d.UpdatedAt = Now()
 	res, err := db.sql.ExecContext(ctx, `UPDATE devices SET group_id = ?, name = ?, kind = ?, url = ?, open_mode = ?,
 		isolation = ?, tls_mode = ?, auto_login = ?, health_enabled = ?, notes = ?, sort = ?, monitor_source = ?, monitor_driver = ?,
-		monitor_interval = ?, snmp_version = ?, snmp_port = ?, updated_at = ? WHERE id = ?`,
+		monitor_interval = ?, snmp_version = ?, snmp_port = ?, config_source = ?, updated_at = ? WHERE id = ?`,
 		nullID(d.GroupID), d.Name, d.Kind, d.URL, d.OpenMode, d.Isolation, d.TLSMode, boolInt(d.AutoLogin),
 		boolInt(d.HealthEnabled), d.Notes, d.Sort, d.MonitorSource, d.MonitorDriver, d.MonitorInterval,
-		d.SNMPVersion, d.SNMPPort, unix(d.UpdatedAt), d.ID)
+		d.SNMPVersion, d.SNMPPort, configSource(d.ConfigSource), unix(d.UpdatedAt), d.ID)
 	if err != nil {
 		return err
 	}
@@ -211,6 +258,22 @@ func (db *DB) SetDeviceSNMPCredentials(ctx context.Context, id int64, enc []byte
 	_, err := db.sql.ExecContext(ctx, `UPDATE devices SET snmp_credentials = ?, updated_at = ? WHERE id = ?`,
 		enc, unix(Now()), id)
 	return err
+}
+
+// SetDeviceSNMPWriteCredentials stores (or with nil removes) the encrypted
+// SNMP write community or v3 login.
+func (db *DB) SetDeviceSNMPWriteCredentials(ctx context.Context, id int64, enc []byte) error {
+	_, err := db.sql.ExecContext(ctx, `UPDATE devices SET snmp_write_credentials = ?, updated_at = ? WHERE id = ?`,
+		enc, unix(Now()), id)
+	return err
+}
+
+// configSource maps an empty value to ConfigNone.
+func configSource(s string) string {
+	if s == "" {
+		return ConfigNone
+	}
+	return s
 }
 
 // SetDeviceTLS stores the pinned certificate and the profile that worked.

@@ -94,6 +94,8 @@ type switchPage struct {
 	Ports    []portRow
 	VLANs    []vlanRow
 	Events   []eventRow
+	// Config is set only for admins when changing settings is enabled.
+	Config *configView
 }
 
 func (s *Server) lookupStatus(w http.ResponseWriter, r *http.Request) (poller.Status, bool) {
@@ -140,6 +142,7 @@ func (s *Server) switchPage(w http.ResponseWriter, r *http.Request) {
 	if evs, err := s.DB.ListEvents(r.Context(), st.DeviceID, 0, 50); err == nil {
 		d.Events = eventRows(p, evs, base)
 	}
+	d.Config = s.switchConfig(r, p, st, base)
 	p.Data = d
 	s.render(w, r, "switch", p)
 }
@@ -200,6 +203,7 @@ func (s *Server) portPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	pp.NoHist = !pp.HasChart
+	pp.Switch.Config = s.portConfig(r, p, st, port, base)
 	p.Data = pp
 	s.render(w, r, "port", p)
 }
