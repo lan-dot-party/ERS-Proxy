@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -40,8 +41,14 @@ type Value struct {
 func (v Value) AsInt() (int, bool) {
 	switch v.Kind {
 	case KindInt:
+		if v.Int > math.MaxInt || v.Int < math.MinInt {
+			return 0, false
+		}
 		return int(v.Int), true
 	case KindUint:
+		if v.Uint > math.MaxInt {
+			return 0, false
+		}
 		return int(v.Uint), true
 	}
 	return 0, false
@@ -328,7 +335,14 @@ func ReadSystem(ctx context.Context, r Reader) (System, error) {
 }
 
 // Ticks converts TimeTicks (1/100 s).
-func Ticks(t uint64) time.Duration { return time.Duration(t) * 10 * time.Millisecond }
+// Values that would overflow a Duration are clamped to its maximum.
+func Ticks(t uint64) time.Duration {
+	const unit = 10 * time.Millisecond
+	if t > math.MaxInt64/uint64(unit) {
+		return time.Duration(math.MaxInt64)
+	}
+	return time.Duration(t) * unit
+}
 
 // MaxBitsOctets is the longest bit string BitsMSB reads (8192 bits).
 const MaxBitsOctets = 1024

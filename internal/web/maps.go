@@ -485,8 +485,10 @@ func (s *Server) mapLinkAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	num := func(k string) int64 { v, _ := strconv.ParseInt(r.PostFormValue(k), 10, 64); return v }
-	l := &store.MapLink{Kind: r.PostFormValue("kind"), ADevice: num("a_device"), AIf: int(num("a_if")),
-		BDevice: num("b_device"), BIf: int(num("b_if"))}
+	// Interface indexes are 32-bit in SNMP; larger input parses to 0.
+	ifNum := func(k string) int { v, _ := strconv.ParseInt(r.PostFormValue(k), 10, 32); return int(v) }
+	l := &store.MapLink{Kind: r.PostFormValue("kind"), ADevice: num("a_device"), AIf: ifNum("a_if"),
+		BDevice: num("b_device"), BIf: ifNum("b_if")}
 	if err := s.DB.AddMapLink(r.Context(), m.ID, l); err != nil {
 		http.Error(w, "invalid link", http.StatusUnprocessableEntity)
 		return
